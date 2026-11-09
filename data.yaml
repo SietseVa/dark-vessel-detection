@@ -1,0 +1,7 @@
+path: /Users/bureauinnovatie2/Documents/dark-vessels/dark-vessel-detection/data
+train: images/train
+val: images/val
+
+names:
+  0: vessel
+  1: non_vessel

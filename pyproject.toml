@@ -11,4 +11,5 @@ dependencies = [
     "pillow>=13.0.0",
     "requests>=2.34.2",
     "tifffile>=2026.10.15",
+    "ultralytics>=8.4.208",
 ]
