@@ -87,3 +87,31 @@ eens gedownload.
 
 Met de functie `tile_pixel_to_latlon` uit `tiff_to_tiles.ipynb` zet je de positie van een detectie
 (een pixel in een tegel) om naar breedte- en lengtegraad. Zo kun je detecties vergelijken met AIS-posities.
+
+---
+
+## Dashboard (frontend + API)
+
+Een webdashboard om de dataset te verkennen: een kaart met alle tegels en objecten (AIS, dark, vast),
+een tegelbrowser met de labels over het radarbeeld, en grafieken per scène, lengte en afstand tot de kust.
+
+- `backend/`: FastAPI. Leest `data/xview3_tiles/` en serveert de metadata en tegelbeelden onder `/api`.
+  Tegels hebben in de dataset geen lat/lon; per scène wordt een kubische fit pixel → lat/lon gemaakt op de
+  objecten (fout < 10 m) om elke tegel op de kaart te zetten.
+- `frontend/`: React + Vite + TypeScript, shadcn/ui (Tailwind), MapLibre + deck.gl, Recharts.
+
+**Vereisten:** [uv](https://docs.astral.sh/uv/) en Node.js 20+. De dataset staat in `data/xview3_tiles/` (gitignored).
+
+Start de API (vanuit de root van de repo):
+
+```bash
+uv run uvicorn backend.main:app --reload --port 8000
+```
+
+Start de frontend in een tweede terminal:
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Open daarna http://localhost:5180. De frontend stuurt `/api` door naar poort 8000.
