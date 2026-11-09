@@ -81,3 +81,56 @@ export async function loadDataset(): Promise<Dataset> {
 export const tileImageUrl = (id: string) => `/api/tiles/${encodeURIComponent(id)}/image`
 export const tileThumbUrl = (id: string, size = 192) =>
   `/api/tiles/${encodeURIComponent(id)}/thumb?size=${size}`
+
+// ---- YOLO model -------------------------------------------------------------------------------
+
+export interface TrainingMetrics {
+  epochs_trained: number
+  best_epoch: number
+  precision: number
+  recall: number
+  map50: number
+  map50_95: number
+}
+
+export type ModelInfo =
+  | { available: false }
+  | {
+      available: true
+      name: string
+      weights: string
+      imgsz: number
+      classes: string[]
+      training: TrainingMetrics | null
+      predicted_tiles: number
+    }
+
+/** One model detection. match_id is the id of the labelled object it was matched to (within
+ *  200 m, highest confidence first), or null when the model found something nobody labelled. */
+export interface Detection {
+  id: string
+  tile_id: string
+  scene_id: string
+  split: Split
+  class: 'vessel' | 'non_vessel'
+  conf: number
+  x_px: number
+  y_px: number
+  w_px: number
+  h_px: number
+  lat: number
+  lon: number
+  match_id: number | null
+}
+
+export interface Predictions {
+  model: string
+  min_conf: number
+  tile_ids: string[]
+  detections: Detection[]
+}
+
+export const loadModel = () => get<ModelInfo>('/api/model')
+export const loadPredictions = () => get<Predictions>('/api/predictions')
+export const loadTileDetections = (id: string) =>
+  get<Detection[]>(`/api/tiles/${encodeURIComponent(id)}/detections`)

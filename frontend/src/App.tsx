@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Category, Dataset, Scene, VesselObject } from '@/api'
-import { loadDataset } from '@/api'
+import type { Category, Dataset, Detection, ModelInfo, Predictions, Scene, VesselObject } from '@/api'
+import { loadDataset, loadModel, loadPredictions } from '@/api'
 import { DEFAULT_FILTERS, objectMatches, tileMatches, type Filters, type Fishing } from '@/filters'
-import { CATEGORIES, CATEGORY_LABEL, fmt } from '@/theme'
+import { CATEGORIES, CATEGORY_HEX, CATEGORY_LABEL, fmt } from '@/theme'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -50,6 +50,25 @@ function histogram(
   return bins
 }
 
+function Recall({ category, found, total }: { category: Category; found: number; total: number }) {
+  const pct = total ? Math.round((found / total) * 100) : 0
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2 text-sm">
+        <Swatch category={category} />
+        <span className="flex-1">{CATEGORY_LABEL[category]}</span>
+        <span className="tabular-nums text-muted-foreground">
+          {fmt.format(found)} / {fmt.format(total)}
+        </span>
+        <span className="w-10 text-right font-medium tabular-nums">{total ? `${pct}%` : '–'}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: CATEGORY_HEX[category] }} />
+      </div>
+    </div>
+  )
+}
+
 function Kpi({ label, value, sub, category }: { label: string; value: number; sub?: string; category?: Category }) {
   return (
     <Card size="sm" className="gap-1">
@@ -71,9 +90,21 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [view, setView] = useState<'map' | 'tiles'>('map')
   const [selectedTile, setSelectedTile] = useState<string | null>(null)
+  const [model, setModel] = useState<ModelInfo | null>(null)
+  const [predictions, setPredictions] = useState<Predictions | null>(null)
+  const [minConf, setMinConf] = useState(0.25)
+  const [showModelOnMap, setShowModelOnMap] = useState(true)
 
   useEffect(() => {
     loadDataset().then(setData, (e) => setError(String(e)))
+    // The model is optional: the dashboard works without it.
+    loadModel().then(
+      (m) => {
+        setModel(m)
+        if (m.available && m.predicted_tiles > 0) loadPredictions().then(setPredictions, () => {})
+      },
+      () => setModel({ available: false }),
+    )
   }, [])
 
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setFilters((f) => ({ ...f, [k]: v }))
@@ -136,6 +167,39 @@ export default function App() {
     [objects],
   )
 
+  // Model results. A labelled object counts as found when a detection above the threshold was
+  // matched to it; only tiles the model has run on count.
+  const predictedTiles = useMemo(() => new Set(predictions?.tile_ids ?? []), [predictions])
+  const foundConf = useMemo(() => {
+    const m = new Map<number, number>()
+    for (const d of predictions?.detections ?? []) if (d.match_id != null && d.conf >= minConf) m.set(d.match_id, d.conf)
+    return m
+  }, [predictions, minConf])
+  const unmatched = useMemo(
+    (): Detection[] =>
+      (predictions?.detections ?? []).filter(
+        (d) =>
+          d.match_id == null &&
+          d.conf >= minConf &&
+          (filters.split === 'all' || d.split === filters.split) &&
+          (!filters.scene || d.scene_id === filters.scene),
+      ),
+    [predictions, minConf, filters.split, filters.scene],
+  )
+  const recall = useMemo(() => {
+    const r: Record<Category, { found: number; total: number }> = {
+      ais: { found: 0, total: 0 },
+      dark: { found: 0, total: 0 },
+      fixed: { found: 0, total: 0 },
+    }
+    for (const o of objects) {
+      if (!predictedTiles.has(o.tile_id)) continue
+      r[o.category].total++
+      if (foundConf.has(o.id)) r[o.category].found++
+    }
+    return r
+  }, [objects, predictedTiles, foundConf])
+
   const tileIndex = selectedTile ? tiles.findIndex((t) => t.tile_id === selectedTile) : -1
   const tile = selectedTile ? (data?.tiles.find((t) => t.tile_id === selectedTile) ?? null) : null
   const step = useCallback(
@@ -186,6 +250,62 @@ export default function App() {
               <Kpi label="Dark" value={counts.dark} sub={`${darkShare}% of vessels`} category="dark" />
               <Kpi label="Fixed" value={counts.fixed} category="fixed" />
             </div>
+
+            {model?.available && (
+              <Card size="sm">
+                <CardHeader>
+                  <CardTitle>Model · {model.name}</CardTitle>
+                  <CardDescription>
+                    {model.training
+                      ? `Val mAP50 ${model.training.map50.toFixed(2)} (epoch ${model.training.best_epoch} of ${model.training.epochs_trained}) · `
+                      : ''}
+                    {predictions
+                      ? `run on ${fmt.format(predictedTiles.size)} of ${fmt.format(data.summary.n_tiles)} tiles`
+                      : 'tiles are predicted when you open them'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label className="text-muted-foreground">Confidence ≥ {minConf.toFixed(2)}</Label>
+                    <Slider min={0.05} max={0.95} step={0.05} value={[minConf]} onValueChange={([v]) => setMinConf(v)} />
+                  </div>
+                  {predictions ? (
+                    <>
+                      <div className="flex flex-col gap-3">
+                        <span className="text-xs text-muted-foreground">Labelled objects the model found</span>
+                        {CATEGORIES.filter((c) => filters.categories[c]).map((c) => (
+                          <Recall key={c} category={c} {...recall[c]} />
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        <Checkbox
+                          id="model-map"
+                          checked={showModelOnMap}
+                          onCheckedChange={(v) => setShowModelOnMap(v === true)}
+                        />
+                        <Label htmlFor="model-map" className="flex-1 font-normal">
+                          <span className="inline-block size-2.5 shrink-0 rounded-full border-2 border-foreground" />
+                          Detections without a label
+                        </Label>
+                        <span className="text-sm tabular-nums text-muted-foreground">{fmt.format(unmatched.length)}</span>
+                      </div>
+                      {filters.split !== 'val' && (
+                        <p className="text-xs text-muted-foreground">
+                          The model was trained on the train tiles, so scores there are too optimistic. Choose
+                          Validation for a fair score.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      To score the whole dataset, run{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono">uv run python -m backend.predict</code>{' '}
+                      and reload.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
@@ -347,6 +467,9 @@ export default function App() {
               focusScene={filters.scene}
               selectedTile={selectedTile}
               onSelectTile={setSelectedTile}
+              foundConf={predictions ? foundConf : null}
+              predictedTiles={predictedTiles}
+              detections={showModelOnMap ? unmatched : []}
             />
           ) : (
             <TileGrid tiles={tiles} selected={selectedTile} onSelect={setSelectedTile} />
@@ -360,6 +483,9 @@ export default function App() {
               onPrev={() => step(-1)}
               onNext={() => step(1)}
               onClose={() => setSelectedTile(null)}
+              model={model?.available ? model.name : null}
+              minConf={minConf}
+              onMinConf={setMinConf}
             />
           )}
         </div>

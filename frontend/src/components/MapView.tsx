@@ -6,7 +6,7 @@ import type { PickingInfo } from '@deck.gl/core'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import '../maplibre-setup'
 
-import type { Scene, Tile, VesselObject } from '@/api'
+import type { Detection, Scene, Tile, VesselObject } from '@/api'
 import { CATEGORY_HEX, CATEGORY_LABEL, hexToRgb } from '@/theme'
 
 const BASEMAP = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
@@ -31,9 +31,24 @@ interface Props {
   focusScene: string | null
   selectedTile: string | null
   onSelectTile: (id: string) => void
+  /** Object id -> confidence of the detection matched to it; null when no predictions are loaded. */
+  foundConf: Map<number, number> | null
+  predictedTiles: Set<string>
+  /** Model detections without a label. */
+  detections: Detection[]
 }
 
-export function MapView({ scenes, tiles, objects, focusScene, selectedTile, onSelectTile }: Props) {
+export function MapView({
+  scenes,
+  tiles,
+  objects,
+  focusScene,
+  selectedTile,
+  onSelectTile,
+  foundConf,
+  predictedTiles,
+  detections,
+}: Props) {
   const mapRef = useRef<MapRef>(null)
 
   useEffect(() => {
@@ -44,6 +59,9 @@ export function MapView({ scenes, tiles, objects, focusScene, selectedTile, onSe
   }, [focusScene, scenes])
 
   const sortedObjects = useMemo(() => [...objects].sort((a, b) => Z[a.category] - Z[b.category]), [objects])
+
+  // With predictions loaded, objects the model missed are drawn hollow.
+  const missed = (o: VesselObject) => foundConf != null && predictedTiles.has(o.tile_id) && !foundConf.has(o.id)
 
   const layers = [
     new PolygonLayer<Tile>({
@@ -67,31 +85,65 @@ export function MapView({ scenes, tiles, objects, focusScene, selectedTile, onSe
       id: 'objects',
       data: sortedObjects,
       getPosition: (o) => [o.lon, o.lat],
-      getFillColor: (o) => RGB[o.category],
+      getFillColor: (o) => (missed(o) ? [255, 255, 255, 230] : RGB[o.category]),
       getRadius: (o) => Math.max(o.length_m ?? 0, 80),
       radiusUnits: 'meters',
       radiusMinPixels: 3,
       radiusMaxPixels: 14,
       stroked: true,
-      getLineColor: [255, 255, 255, 230],
+      getLineColor: (o) => (missed(o) ? RGB[o.category] : [255, 255, 255, 230]),
       lineWidthUnits: 'pixels',
-      getLineWidth: 1,
+      getLineWidth: (o) => (missed(o) ? 2 : 1),
       pickable: true,
       autoHighlight: true,
       highlightColor: [10, 10, 10, 220],
+      updateTriggers: { getFillColor: [foundConf], getLineColor: [foundConf], getLineWidth: [foundConf] },
+    }),
+    new ScatterplotLayer<Detection>({
+      id: 'detections',
+      data: detections,
+      getPosition: (d) => [d.lon, d.lat],
+      getRadius: 120,
+      radiusUnits: 'meters',
+      radiusMinPixels: 4,
+      radiusMaxPixels: 12,
+      filled: false,
+      stroked: true,
+      getLineColor: [30, 30, 30, 220],
+      lineWidthUnits: 'pixels',
+      getLineWidth: 2,
+      pickable: true,
+      autoHighlight: true,
+      highlightColor: [10, 10, 10, 255],
     }),
   ]
 
   const getTooltip = ({ object, layer }: PickingInfo) => {
     if (!object || !layer) return null
+    if (layer.id === 'detections') {
+      const d = object as Detection
+      return {
+        html: `<div class="mb-1 flex items-center gap-2 font-medium"><span class="inline-block size-2.5 rounded-full border-2 border-foreground"></span>Model detection, no label</div>
+          <div class="flex justify-between gap-6 text-muted-foreground"><span>Class</span><span class="font-mono font-medium text-foreground">${d.class}</span></div>
+          <div class="flex justify-between gap-6 text-muted-foreground"><span>Confidence</span><span class="font-mono font-medium text-foreground tabular-nums">${d.conf.toFixed(2)}</span></div>
+          <div class="mt-1.5 text-xs text-muted-foreground">False alarm, or a vessel the labels missed. Click to open tile</div>`,
+        className: 'min-w-44 max-w-64 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-foreground shadow-xl',
+        style: { backgroundColor: 'var(--background)', color: 'var(--foreground)', padding: '6px 10px' },
+      }
+    }
     if (layer.id === 'objects') {
       const o = object as VesselObject
+      const model =
+        foundConf == null || !predictedTiles.has(o.tile_id)
+          ? ''
+          : `<div class="flex justify-between gap-6 text-muted-foreground"><span>Model</span><span class="font-mono font-medium text-foreground tabular-nums">${foundConf.has(o.id) ? 'found ' + foundConf.get(o.id)!.toFixed(2) : 'missed'}</span></div>`
       return {
         html: `<div class="mb-1 flex items-center gap-2 font-medium"><span class="inline-block size-2.5 rounded-full" style="background:${CATEGORY_HEX[o.category]}"></span>${CATEGORY_LABEL[o.category]}</div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Length</span><span class="font-mono font-medium text-foreground tabular-nums">${o.length_m != null ? o.length_m.toFixed(0) + ' m' : 'unknown'}</span></div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Fishing</span><span class="font-mono font-medium text-foreground tabular-nums">${o.is_fishing == null ? 'unknown' : o.is_fishing ? 'yes' : 'no'}</span></div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Label source</span><span class="font-mono font-medium text-foreground tabular-nums">${o.source}</span></div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Shore distance</span><span class="font-mono font-medium text-foreground tabular-nums">${o.dist_shore_km != null ? o.dist_shore_km.toFixed(1) + ' km' : 'unknown'}</span></div>
+          ${model}
           <div class="mt-1.5 text-xs text-muted-foreground">Click to open tile</div>`,
         className: 'min-w-44 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-foreground shadow-xl',
         style: { backgroundColor: 'var(--background)', color: 'var(--foreground)', padding: '6px 10px' },
@@ -111,7 +163,7 @@ export function MapView({ scenes, tiles, objects, focusScene, selectedTile, onSe
 
   const onClick = ({ object, layer }: PickingInfo) => {
     if (!object || !layer) return
-    onSelectTile(layer.id === 'objects' ? (object as VesselObject).tile_id : (object as Tile).tile_id)
+    onSelectTile((object as VesselObject | Detection | Tile).tile_id)
   }
 
   return (

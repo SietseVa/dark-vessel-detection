@@ -36,3 +36,9 @@ export function hexToRgb(hex: string): [number, number, number] {
 }
 
 export const fmt = new Intl.NumberFormat('en-US')
+
+// Model detections in the tile viewer (drawn over dark radar, dashed so they never read as labels).
+export const DETECTION_HEX = {
+  matched: '#ffffff', // matches a label
+  unmatched: '#f2c94c', // nothing labelled here: false alarm, or a vessel the labels missed
+}

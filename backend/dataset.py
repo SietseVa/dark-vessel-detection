@@ -61,10 +61,18 @@ class Dataset:
     tiles: dict[str, dict] = field(default_factory=dict)
     objects: list[dict] = field(default_factory=list)
     scenes: dict[str, dict] = field(default_factory=dict)
+    fits: dict[str, GeoFit] = field(default_factory=dict)
 
     def image_path(self, tile_id: str) -> Path:
         t = self.tiles[tile_id]
         return self.root / "images" / t["split"] / f"{tile_id}.png"
+
+    def tile_latlon(self, tile_id: str, x_px, y_px) -> tuple[np.ndarray, np.ndarray]:
+        """Pixel position inside a tile -> (lat, lon), via the scene's georeference fit."""
+        t = self.tiles[tile_id]
+        rows = t["pixel_row"] + np.asarray(y_px, float)
+        cols = t["pixel_col"] + np.asarray(x_px, float)
+        return self.fits[t["scene_id"]](np.atleast_1d(rows), np.atleast_1d(cols))
 
     @classmethod
     def load(cls, root: Path) -> "Dataset":
@@ -113,7 +121,7 @@ class Dataset:
                 (t["pixel_row"] + obj["y_px"], t["pixel_col"] + obj["x_px"], obj["lat"], obj["lon"])
             )
 
-        fits = {s: _fit(np.array(p)) for s, p in geo_points.items()}
+        ds.fits = fits = {s: _fit(np.array(p)) for s, p in geo_points.items()}
 
         by_scene: dict[str, list[dict]] = defaultdict(list)
         for t in ds.tiles.values():

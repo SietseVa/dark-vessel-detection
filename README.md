@@ -115,3 +115,22 @@ cd frontend && npm install && npm run dev
 ```
 
 Open daarna http://localhost:5180. De frontend stuurt `/api` door naar poort 8000.
+
+### YOLO-model in het dashboard
+
+De API laadt automatisch de nieuwste `runs/**/weights/best.pt` (of kies er zelf een met `MODEL_PATH=...`).
+Zonder gewichten werkt het dashboard gewoon, alleen zonder modelresultaten.
+
+- In de tegelviewer staan de detecties van het model gestippeld over het radarbeeld (wit = komt overeen
+  met een label, geel = geen label), met een kolom *Model* in de objecttabel. Een tegel die nog niet
+  voorspeld is, wordt bij openen door het model gehaald.
+- Draai het model één keer over de hele dataset om ook de kaart en de scores in de zijbalk te vullen:
+
+  ```bash
+  uv run python -m backend.predict            # of --split val, --weights pad/naar/best.pt
+  ```
+
+  De resultaten komen in `data/cache/predictions/<run>.json`. Herstart daarna de API.
+- Een detectie telt als gevonden binnen 200 m (20 px) van een label, net als bij xView3. Op de kaart zijn
+  gemiste objecten hol, en detecties zonder label donkere ringen: vals alarm, of een schip dat niet gelabeld is.
+- Het model is op de train-tegels getraind: kijk naar de **Validation**-split voor een eerlijke score.

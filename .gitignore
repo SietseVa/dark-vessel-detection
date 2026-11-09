@@ -9,4 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
-data/
+
+# dataset, training runs and weights (data/ and runs/ may be symlinks)
+data
+runs
+*.pt

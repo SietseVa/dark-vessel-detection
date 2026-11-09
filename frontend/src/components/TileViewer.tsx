@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
-import type { Tile, VesselObject } from '@/api'
-import { tileImageUrl } from '@/api'
+import type { Detection, Tile, VesselObject } from '@/api'
+import { loadTileDetections, tileImageUrl } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { CATEGORY_HEX, CATEGORY_SHORT } from '@/theme'
+import { CATEGORY_HEX, CATEGORY_SHORT, DETECTION_HEX } from '@/theme'
 import { Swatch } from './Swatch'
 
 type Channel = 'rgb' | 'vv' | 'vh'
@@ -22,9 +22,13 @@ interface Props {
   onPrev: () => void
   onNext: () => void
   onClose: () => void
+  /** Run name of the YOLO model, or null when no model is available. */
+  model: string | null
+  minConf: number
+  onMinConf: (v: number) => void
 }
 
-export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClose }: Props) {
+export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClose, model, minConf, onMinConf }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [loaded, setLoaded] = useState<{ id: string; im: HTMLImageElement } | null>(null)
   const img = loaded?.id === tile.tile_id ? loaded.im : null
@@ -32,6 +36,28 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
   const [gain, setGain] = useState(2)
   const [showBoxes, setShowBoxes] = useState(true)
   const [hovered, setHovered] = useState<number | null>(null)
+  const [showModel, setShowModel] = useState(true)
+  const [dets, setDets] = useState<{ id: string; dets: Detection[] | null; error?: string } | null>(null)
+  const allDetections = dets?.id === tile.tile_id ? dets.dets : null
+  const detError = dets?.id === tile.tile_id ? dets.error : undefined
+
+  // Detections come from the prediction cache, or the backend runs the model on this tile now.
+  useEffect(() => {
+    if (!model) return
+    let cancelled = false
+    const id = tile.tile_id
+    loadTileDetections(id).then(
+      (d) => !cancelled && setDets({ id, dets: d }),
+      (e) => !cancelled && setDets({ id, dets: null, error: String(e) }),
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [tile.tile_id, model])
+
+  const detections = (allDetections ?? []).filter((d) => d.conf >= minConf)
+  const foundConf = new Map(detections.filter((d) => d.match_id != null).map((d) => [d.match_id!, d.conf]))
+  const unmatched = detections.filter((d) => d.match_id == null)
 
   useEffect(() => {
     let cancelled = false
@@ -122,9 +148,30 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
           </div>
           <div className="flex items-center gap-2">
             <Checkbox id="boxes" checked={showBoxes} onCheckedChange={(v) => setShowBoxes(v === true)} />
-            <Label htmlFor="boxes">Boxes</Label>
+            <Label htmlFor="boxes">Labels</Label>
           </div>
+          {model && (
+            <div className="flex items-center gap-2">
+              <Checkbox id="model-boxes" checked={showModel} onCheckedChange={(v) => setShowModel(v === true)} />
+              <Label htmlFor="model-boxes">Model</Label>
+            </div>
+          )}
         </div>
+
+        {model && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-3">
+              <Label className="text-muted-foreground">Confidence ≥ {minConf.toFixed(2)}</Label>
+              <Slider className="w-28" min={0.05} max={0.95} step={0.05} value={[minConf]} onValueChange={([v]) => onMinConf(v)} />
+            </div>
+            <span className="flex items-center gap-1.5">
+              <span className="w-4 border-t-2 border-dashed" style={{ borderColor: '#9ca3af' }} /> matches a label
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-4 border-t-2 border-dashed" style={{ borderColor: DETECTION_HEX.unmatched }} /> no label
+            </span>
+          </div>
+        )}
 
         <div className="relative aspect-square shrink-0 overflow-hidden rounded-lg bg-black">
           <canvas ref={canvasRef} width={640} height={640} className="absolute inset-0 size-full [image-rendering:pixelated]" />
@@ -151,7 +198,60 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
               })}
             </svg>
           )}
+          {model && showModel && (
+            <svg viewBox="0 0 640 640" className="pointer-events-none absolute inset-0 size-full">
+              {detections.map((d) => {
+                const w = Math.max(d.w_px, 10)
+                const h = Math.max(d.h_px, 10)
+                const color = d.match_id == null ? DETECTION_HEX.unmatched : DETECTION_HEX.matched
+                const strong = d.match_id != null && hovered === d.match_id
+                return (
+                  <g key={d.id}>
+                    <rect
+                      x={d.x_px - w / 2}
+                      y={d.y_px - h / 2}
+                      width={w}
+                      height={h}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={strong ? 2.5 : 1.5}
+                      strokeDasharray="4 3"
+                    />
+                    <text
+                      x={d.x_px - w / 2}
+                      y={d.y_px - h / 2 - 3}
+                      fill={color}
+                      fontSize={12}
+                      fontFamily="ui-monospace, monospace"
+                      paintOrder="stroke"
+                      stroke="#000"
+                      strokeWidth={3}
+                    >
+                      {d.class === 'non_vessel' ? 'fixed ' : ''}
+                      {d.conf.toFixed(2)}
+                    </text>
+                  </g>
+                )
+              })}
+            </svg>
+          )}
         </div>
+
+        {model && (
+          <p className="text-xs text-muted-foreground">
+            {detError ? (
+              <>Model failed on this tile: {detError}</>
+            ) : allDetections == null ? (
+              <>Running {model}…</>
+            ) : (
+              <>
+                {model}: {detections.length} detection{detections.length === 1 ? '' : 's'}
+                {objects.length > 0 && <> · found {foundConf.size} of {objects.length} labels</>}
+                {unmatched.length > 0 && <> · {unmatched.length} without a label</>}
+              </>
+            )}
+          </p>
+        )}
 
         <div className="flex justify-between text-xs tabular-nums text-muted-foreground">
           <span>{Math.round(tile.valid_fraction * 100)}% valid pixels</span>
@@ -172,6 +272,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                 <TableHead>Fishing</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead className="text-right">Shore</TableHead>
+                {model && <TableHead className="text-right">Model</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -191,6 +292,13 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                   <TableCell className="text-right tabular-nums">
                     {o.dist_shore_km != null ? `${o.dist_shore_km.toFixed(1)} km` : '–'}
                   </TableCell>
+                  {model && (
+                    <TableCell className="text-right tabular-nums">
+                      {allDetections == null ? '…' : foundConf.has(o.id) ? foundConf.get(o.id)!.toFixed(2) : (
+                        <span className="text-muted-foreground">missed</span>
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
