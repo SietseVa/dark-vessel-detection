@@ -4,14 +4,52 @@
     {
       "name": "api",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "backend.main:app", "--reload", "--port", "8000"],
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "backend.main:app",
+        "--reload",
+        "--port",
+        "8000"
+      ],
       "port": 8000
     },
     {
       "name": "frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev"
+      ],
       "port": 5180
+    },
+    {
+      "name": "gfw-api",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "--directory",
+        "gfw-monitor",
+        "run",
+        "uvicorn",
+        "server.main:app",
+        "--reload",
+        "--port",
+        "8010"
+      ],
+      "port": 8010
+    },
+    {
+      "name": "gfw-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "gfw-monitor/web",
+        "run",
+        "dev"
+      ],
+      "port": 5190
     }
   ]
 }
