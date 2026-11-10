@@ -1,0 +1,17 @@
+[project]
+name = "sar-monitor"
+version = "0.1.0"
+description = "North Sea dark vessel monitor: Sentinel-1 detections matched against recorded AIS"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.162.2",
+    "numpy>=2.5.4",
+    "pillow>=13.0.0",
+    "rasterio>=1.5.2",
+    "requests>=2.34.2",
+    "scipy>=1.18.1",
+    "torch>=2.15.0",
+    "torchvision>=0.29.2",
+    "uvicorn[standard]>=0.54.0",
+    "websockets>=15",
+]
