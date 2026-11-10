@@ -96,7 +96,12 @@ def _store_or_404() -> PredictionStore:
 def model_info():
     if store is None:
         return {"available": False}
-    return {"available": True, **store.detector.info(), "predicted_tiles": len(store.tile_ids)}
+    return {
+        "available": True,
+        **store.detector.info(),
+        "predicted_tiles": len(store.tile_ids),
+        "best_vessel_threshold": store.best_vessel_threshold("val"),
+    }
 
 
 @app.get("/api/predictions")

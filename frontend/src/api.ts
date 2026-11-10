@@ -103,6 +103,8 @@ export type ModelInfo =
       classes: string[]
       training: TrainingMetrics | null
       predicted_tiles: number
+      /** Threshold with the best vessel F1 on the validation tiles (null until predictions exist). */
+      best_vessel_threshold: { conf: number; f1: number; precision: number; recall: number } | null
     }
 
 /** One model detection. match_id is the id of the labelled object it was matched to (within
@@ -134,3 +136,5 @@ export const loadModel = () => get<ModelInfo>('/api/model')
 export const loadPredictions = () => get<Predictions>('/api/predictions')
 export const loadTileDetections = (id: string) =>
   get<Detection[]>(`/api/tiles/${encodeURIComponent(id)}/detections`)
+
+export type DetectionCounts = Record<Detection['class'], number>

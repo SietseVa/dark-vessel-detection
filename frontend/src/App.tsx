@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Category, Dataset, Detection, ModelInfo, Predictions, Scene, VesselObject } from '@/api'
+import type { Category, Dataset, Detection, DetectionCounts, ModelInfo, Predictions, Scene, Tile, VesselObject } from '@/api'
 import { loadDataset, loadModel, loadPredictions } from '@/api'
 import { DEFAULT_FILTERS, objectMatches, tileMatches, type Filters, type Fishing } from '@/filters'
-import { CATEGORIES, CATEGORY_HEX, CATEGORY_LABEL, fmt } from '@/theme'
+import { CATEGORIES, CATEGORY_HEX, CATEGORY_LABEL, MODEL_HEX, MODEL_LABEL, fmt, type Layers } from '@/theme'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -69,12 +69,25 @@ function Recall({ category, found, total }: { category: Category; found: number;
   )
 }
 
-function Kpi({ label, value, sub, category }: { label: string; value: number; sub?: string; category?: Category }) {
+function Kpi({
+  label,
+  value,
+  sub,
+  category,
+  color,
+}: {
+  label: string
+  value: number
+  sub?: string
+  category?: Category
+  color?: string
+}) {
   return (
     <Card size="sm" className="gap-1">
       <CardHeader>
         <CardDescription className="flex items-center gap-1.5 text-xs">
           {category && <Swatch category={category} className="size-2" />}
+          {color && <span aria-hidden className="inline-block size-2 shrink-0 rounded-full" style={{ background: color }} />}
           {label}
         </CardDescription>
         <CardTitle className="text-2xl tabular-nums">{fmt.format(value)}</CardTitle>
@@ -94,6 +107,8 @@ export default function App() {
   const [predictions, setPredictions] = useState<Predictions | null>(null)
   const [minConf, setMinConf] = useState(0.25)
   const [showModelOnMap, setShowModelOnMap] = useState(true)
+  // What to show: dataset labels, model detections, or both (labels with found/missed marks).
+  const [layers, setLayers] = useState<Layers>('labels')
 
   useEffect(() => {
     loadDataset().then(setData, (e) => setError(String(e)))
@@ -101,6 +116,8 @@ export default function App() {
     loadModel().then(
       (m) => {
         setModel(m)
+        if (m.available && m.best_vessel_threshold) setMinConf(m.best_vessel_threshold.conf)
+        if (m.available) setLayers('both')
         if (m.available && m.predicted_tiles > 0) loadPredictions().then(setPredictions, () => {})
       },
       () => setModel({ available: false }),
@@ -117,15 +134,45 @@ export default function App() {
     [data, filters.split],
   )
   const objects = useMemo(() => (data?.objects ?? []).filter((o) => objectMatches(o, filters)), [data, filters])
-  const tiles = useMemo(
-    () =>
-      (data?.tiles ?? [])
-        .filter((t) => tileMatches(t, filters))
-        .sort(
-          (a, b) => b.counts.dark - a.counts.dark || b.counts.ais - a.counts.ais || a.tile_id.localeCompare(b.tile_id),
-        ),
-    [data, filters],
+  const modelOnly = layers === 'model'
+
+  // Model detections above the threshold, with the same split/scene filter as the tiles.
+  const shownDetections = useMemo(
+    (): Detection[] =>
+      (predictions?.detections ?? []).filter(
+        (d) =>
+          d.conf >= minConf &&
+          (filters.split === 'all' || d.split === filters.split) &&
+          (!filters.scene || d.scene_id === filters.scene),
+      ),
+    [predictions, minConf, filters.split, filters.scene],
   )
+  const detCounts = useMemo(() => {
+    const m = new Map<string, DetectionCounts>()
+    for (const d of shownDetections) {
+      if (!m.has(d.tile_id)) m.set(d.tile_id, { vessel: 0, non_vessel: 0 })
+      m.get(d.tile_id)![d.class]++
+    }
+    return m
+  }, [shownDetections])
+  const detTotals = useMemo(() => {
+    const c: DetectionCounts = { vessel: 0, non_vessel: 0 }
+    for (const d of shownDetections) c[d.class]++
+    return c
+  }, [shownDetections])
+
+  const tiles = useMemo(() => {
+    const none: DetectionCounts = { vessel: 0, non_vessel: 0 }
+    const byModel = (a: Tile, b: Tile) => {
+      const da = detCounts.get(a.tile_id) ?? none
+      const db = detCounts.get(b.tile_id) ?? none
+      return db.vessel - da.vessel || db.non_vessel - da.non_vessel
+    }
+    const byLabels = (a: Tile, b: Tile) => b.counts.dark - a.counts.dark || b.counts.ais - a.counts.ais
+    return (data?.tiles ?? [])
+      .filter((t) => tileMatches(t, filters))
+      .sort((a, b) => (modelOnly ? byModel(a, b) : byLabels(a, b)) || a.tile_id.localeCompare(b.tile_id))
+  }, [data, filters, modelOnly, detCounts])
   const objectsByTile = useMemo(() => {
     const m = new Map<string, VesselObject[]>()
     for (const o of data?.objects ?? []) {
@@ -245,11 +292,19 @@ export default function App() {
               </p>
             </header>
 
-            <div className="grid grid-cols-3 gap-2">
-              <Kpi label="Vessels" value={vesselTotal} />
-              <Kpi label="Dark" value={counts.dark} sub={`${darkShare}% of vessels`} category="dark" />
-              <Kpi label="Fixed" value={counts.fixed} category="fixed" />
-            </div>
+            {modelOnly ? (
+              <div className="grid grid-cols-3 gap-2">
+                <Kpi label="Vessels" value={detTotals.vessel} sub="detected" color={MODEL_HEX.vessel} />
+                <Kpi label="Fixed" value={detTotals.non_vessel} sub="detected" color={MODEL_HEX.non_vessel} />
+                <Kpi label="Tiles" value={detCounts.size} sub="with a detection" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                <Kpi label="Vessels" value={vesselTotal} />
+                <Kpi label="Dark" value={counts.dark} sub={`${darkShare}% of vessels`} category="dark" />
+                <Kpi label="Fixed" value={counts.fixed} category="fixed" />
+              </div>
+            )}
 
             {model?.available && (
               <Card size="sm">
@@ -263,13 +318,45 @@ export default function App() {
                       ? `run on ${fmt.format(predictedTiles.size)} of ${fmt.format(data.summary.n_tiles)} tiles`
                       : 'tiles are predicted when you open them'}
                   </CardDescription>
+                  {model.best_vessel_threshold && (
+                    <CardDescription>
+                      Best vessel F1 {model.best_vessel_threshold.f1.toFixed(2)} on validation (200 m match) at
+                      confidence {model.best_vessel_threshold.conf.toFixed(2)}
+                      {minConf !== model.best_vessel_threshold.conf && (
+                        <>
+                          {' · '}
+                          <Button
+                            variant="link"
+                            className="h-auto p-0 text-xs"
+                            onClick={() => setMinConf(model.best_vessel_threshold!.conf)}
+                          >
+                            use it
+                          </Button>
+                        </>
+                      )}
+                    </CardDescription>
+                  )}
                 </CardHeader>
                 <CardContent className="flex flex-col gap-4">
                   <div className="flex flex-col gap-2">
                     <Label className="text-muted-foreground">Confidence ≥ {minConf.toFixed(2)}</Label>
                     <Slider min={0.05} max={0.95} step={0.05} value={[minConf]} onValueChange={([v]) => setMinConf(v)} />
                   </div>
-                  {predictions ? (
+                  {predictions && modelOnly ? (
+                    <div className="flex flex-col gap-2 text-sm">
+                      {(['vessel', 'non_vessel'] as const).map((c) => (
+                        <div key={c} className="flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="inline-block size-2.5 shrink-0 rounded-full"
+                            style={{ background: MODEL_HEX[c] }}
+                          />
+                          <span className="flex-1">{MODEL_LABEL[c]}</span>
+                          <span className="tabular-nums text-muted-foreground">{fmt.format(detTotals[c])}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : predictions ? (
                     <>
                       <div className="flex flex-col gap-3">
                         <span className="text-xs text-muted-foreground">Labelled objects the model found</span>
@@ -341,6 +428,8 @@ export default function App() {
                 </Select>
               </div>
 
+              {!modelOnly && (
+              <>
               <div className="flex flex-col gap-2">
                 <Label className="text-muted-foreground">Show</Label>
                 <div className="flex flex-col gap-2.5">
@@ -388,6 +477,8 @@ export default function App() {
                   />
                 </div>
               </div>
+              </>
+              )}
               {!isDefault && (
                 <Button variant="link" className="h-auto self-start p-0" onClick={() => setFilters(DEFAULT_FILTERS)}>
                   Reset filters
@@ -395,6 +486,8 @@ export default function App() {
               )}
             </div>
 
+            {!modelOnly && (
+            <>
             <Separator />
 
             <Card size="sm">
@@ -431,6 +524,8 @@ export default function App() {
                 <StackedHistogram data={shoreHist} cats={vesselCats} />
               </CardContent>
             </Card>
+            </>
+            )}
           </div>
         </ScrollArea>
       </aside>
@@ -443,8 +538,26 @@ export default function App() {
               <TabsTrigger value="tiles">Tiles</TabsTrigger>
             </TabsList>
           </Tabs>
+          {model?.available && (
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              spacing={0}
+              value={layers}
+              onValueChange={(v) => v && setLayers(v as Layers)}
+              aria-label="What to show"
+            >
+              <ToggleGroupItem value="labels" title="Only the dataset labels">Labels</ToggleGroupItem>
+              <ToggleGroupItem value="model" title="Only what the model detected">Model</ToggleGroupItem>
+              <ToggleGroupItem value="both" title="Labels, marked found or missed by the model">Both</ToggleGroupItem>
+            </ToggleGroup>
+          )}
           <span className="truncate text-sm text-muted-foreground">
-            {fmt.format(objects.length)} objects · {fmt.format(tiles.length)} tiles
+            {modelOnly
+              ? `${fmt.format(shownDetections.length)} detections`
+              : `${fmt.format(objects.length)} objects`}{' '}
+            · {fmt.format(tiles.length)} tiles
             {activeScene ? ` · ${sceneLabel(activeScene)}` : ''}
           </span>
           {view === 'map' && (
@@ -463,16 +576,23 @@ export default function App() {
             <MapView
               scenes={data.scenes}
               tiles={tiles}
-              objects={objects}
+              objects={modelOnly ? [] : objects}
               focusScene={filters.scene}
               selectedTile={selectedTile}
               onSelectTile={setSelectedTile}
-              foundConf={predictions ? foundConf : null}
+              foundConf={predictions && layers === 'both' ? foundConf : null}
               predictedTiles={predictedTiles}
-              detections={showModelOnMap ? unmatched : []}
+              detections={modelOnly ? shownDetections : layers === 'both' && showModelOnMap ? unmatched : []}
+              layers={layers}
+              detCounts={detCounts}
             />
           ) : (
-            <TileGrid tiles={tiles} selected={selectedTile} onSelect={setSelectedTile} />
+            <TileGrid
+              tiles={tiles}
+              selected={selectedTile}
+              onSelect={setSelectedTile}
+              detCounts={modelOnly ? detCounts : null}
+            />
           )}
           {tile && (
             <TileViewer
@@ -483,7 +603,8 @@ export default function App() {
               onPrev={() => step(-1)}
               onNext={() => step(1)}
               onClose={() => setSelectedTile(null)}
-              model={model?.available ? model.name : null}
+              model={model?.available && layers !== 'labels' ? model.name : null}
+              layers={layers}
               minConf={minConf}
               onMinConf={setMinConf}
             />

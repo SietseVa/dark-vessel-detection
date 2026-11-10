@@ -77,6 +77,31 @@ class PredictionStore:
             self._enriched[tile_id] = dets
         return self._enriched[tile_id]
 
+    def best_vessel_threshold(self, split: str = "val") -> dict | None:
+        """Confidence threshold with the highest vessel F1 on one split, or None without predictions.
+
+        A vessel detection is correct when it was matched to a labelled vessel (within 200 m). Because
+        matching goes from high to low confidence, raising the threshold only drops detections, so one
+        matching serves every threshold.
+        """
+        tile_ids = [t for t in self.tile_ids if self.ds.tiles[t]["split"] == split]
+        if not tile_ids:
+            return None
+        vessel_ids = {o["id"] for o in self.ds.objects if o["class"] == "vessel" and o["split"] == split}
+        dets = [d for t in tile_ids for d in self.for_tile(t) if d["class"] == "vessel"]
+        best = None
+        for conf in [round(0.05 * i, 2) for i in range(1, 19)]:
+            kept = [d for d in dets if d["conf"] >= conf]
+            tp = sum(1 for d in kept if d["match_id"] in vessel_ids)
+            fp = len(kept) - tp
+            fn = len(vessel_ids) - tp
+            p = tp / (tp + fp) if tp + fp else 0.0
+            r = tp / (tp + fn) if tp + fn else 0.0
+            f1 = 2 * p * r / (p + r) if p + r else 0.0
+            if best is None or f1 > best["f1"]:
+                best = {"conf": conf, "f1": round(f1, 4), "precision": round(p, 4), "recall": round(r, 4)}
+        return best
+
     def all(self) -> dict:
         tile_ids = self.tile_ids
         return {

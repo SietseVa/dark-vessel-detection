@@ -42,3 +42,17 @@ export const DETECTION_HEX = {
   matched: '#ffffff', // matches a label
   unmatched: '#f2c94c', // nothing labelled here: false alarm, or a vessel the labels missed
 }
+
+// Detections by predicted class, for the model-only view. The model cannot tell AIS from dark, so
+// its vessels get their own colour instead of the AIS blue or dark orange.
+export const MODEL_HEX = {
+  vessel: '#c4307a',
+  non_vessel: CATEGORY_HEX.fixed,
+}
+
+export const MODEL_LABEL = {
+  vessel: 'Vessel (model)',
+  non_vessel: 'Fixed object (model)',
+}
+
+export type Layers = 'labels' | 'model' | 'both'

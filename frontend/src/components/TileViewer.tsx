@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { CATEGORY_HEX, CATEGORY_SHORT, DETECTION_HEX } from '@/theme'
+import { CATEGORY_HEX, CATEGORY_SHORT, DETECTION_HEX, MODEL_HEX, MODEL_LABEL, type Layers } from '@/theme'
 import { Swatch } from './Swatch'
 
 type Channel = 'rgb' | 'vv' | 'vh'
@@ -26,9 +26,12 @@ interface Props {
   model: string | null
   minConf: number
   onMinConf: (v: number) => void
+  /** 'model' hides everything that comes from the dataset labels. */
+  layers: Layers
 }
 
-export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClose, model, minConf, onMinConf }: Props) {
+export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClose, model, minConf, onMinConf, layers }: Props) {
+  const modelOnly = layers === 'model'
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [loaded, setLoaded] = useState<{ id: string; im: HTMLImageElement } | null>(null)
   const img = loaded?.id === tile.tile_id ? loaded.im : null
@@ -37,6 +40,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
   const [showBoxes, setShowBoxes] = useState(true)
   const [hovered, setHovered] = useState<number | null>(null)
   const [showModel, setShowModel] = useState(true)
+  const [hoveredDet, setHoveredDet] = useState<string | null>(null)
   const [dets, setDets] = useState<{ id: string; dets: Detection[] | null; error?: string } | null>(null)
   const allDetections = dets?.id === tile.tile_id ? dets.dets : null
   const detError = dets?.id === tile.tile_id ? dets.error : undefined
@@ -148,9 +152,9 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
           </div>
           <div className="flex items-center gap-2">
             <Checkbox id="boxes" checked={showBoxes} onCheckedChange={(v) => setShowBoxes(v === true)} />
-            <Label htmlFor="boxes">Labels</Label>
+            <Label htmlFor="boxes">{modelOnly ? 'Detections' : 'Labels'}</Label>
           </div>
-          {model && (
+          {model && !modelOnly && (
             <div className="flex items-center gap-2">
               <Checkbox id="model-boxes" checked={showModel} onCheckedChange={(v) => setShowModel(v === true)} />
               <Label htmlFor="model-boxes">Model</Label>
@@ -164,19 +168,30 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
               <Label className="text-muted-foreground">Confidence ≥ {minConf.toFixed(2)}</Label>
               <Slider className="w-28" min={0.05} max={0.95} step={0.05} value={[minConf]} onValueChange={([v]) => onMinConf(v)} />
             </div>
-            <span className="flex items-center gap-1.5">
-              <span className="w-4 border-t-2 border-dashed" style={{ borderColor: '#9ca3af' }} /> matches a label
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-4 border-t-2 border-dashed" style={{ borderColor: DETECTION_HEX.unmatched }} /> no label
-            </span>
+            {modelOnly ? (
+              (['vessel', 'non_vessel'] as const).map((c) => (
+                <span key={c} className="flex items-center gap-1.5">
+                  <span className="w-4 border-t-2" style={{ borderColor: MODEL_HEX[c] }} /> {MODEL_LABEL[c]}
+                </span>
+              ))
+            ) : (
+              <>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 border-t-2 border-dashed" style={{ borderColor: '#9ca3af' }} /> matches a label
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 border-t-2 border-dashed" style={{ borderColor: DETECTION_HEX.unmatched }} /> no
+                  label
+                </span>
+              </>
+            )}
           </div>
         )}
 
         <div className="relative aspect-square shrink-0 overflow-hidden rounded-lg bg-black">
           <canvas ref={canvasRef} width={640} height={640} className="absolute inset-0 size-full [image-rendering:pixelated]" />
           {!img && <div className="absolute inset-0 grid place-content-center text-sm text-muted-foreground">Loading…</div>}
-          {showBoxes && (
+          {showBoxes && !modelOnly && (
             <svg viewBox="0 0 640 640" className="absolute inset-0 size-full">
               {objects.map((o) => {
                 const pad = 4
@@ -198,13 +213,18 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
               })}
             </svg>
           )}
-          {model && showModel && (
+          {model && (modelOnly ? showBoxes : showModel) && (
             <svg viewBox="0 0 640 640" className="pointer-events-none absolute inset-0 size-full">
               {detections.map((d) => {
                 const w = Math.max(d.w_px, 10)
                 const h = Math.max(d.h_px, 10)
-                const color = d.match_id == null ? DETECTION_HEX.unmatched : DETECTION_HEX.matched
-                const strong = d.match_id != null && hovered === d.match_id
+                // Model-only: colour by predicted class, solid. Otherwise: by whether a label matches.
+                const color = modelOnly
+                  ? MODEL_HEX[d.class]
+                  : d.match_id == null
+                    ? DETECTION_HEX.unmatched
+                    : DETECTION_HEX.matched
+                const strong = modelOnly ? hoveredDet === d.id : d.match_id != null && hovered === d.match_id
                 return (
                   <g key={d.id}>
                     <rect
@@ -214,8 +234,8 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                       height={h}
                       fill="none"
                       stroke={color}
-                      strokeWidth={strong ? 2.5 : 1.5}
-                      strokeDasharray="4 3"
+                      strokeWidth={strong ? 3 : modelOnly ? 2 : 1.5}
+                      strokeDasharray={modelOnly ? undefined : '4 3'}
                     />
                     <text
                       x={d.x_px - w / 2}
@@ -246,8 +266,8 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
             ) : (
               <>
                 {model}: {detections.length} detection{detections.length === 1 ? '' : 's'}
-                {objects.length > 0 && <> · found {foundConf.size} of {objects.length} labels</>}
-                {unmatched.length > 0 && <> · {unmatched.length} without a label</>}
+                {!modelOnly && objects.length > 0 && <> · found {foundConf.size} of {objects.length} labels</>}
+                {!modelOnly && unmatched.length > 0 && <> · {unmatched.length} without a label</>}
               </>
             )}
           </p>
@@ -261,7 +281,49 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
           <span>6.4 × 6.4 km</span>
         </div>
 
-        {objects.length === 0 ? (
+        {modelOnly ? (
+          detections.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {allDetections == null ? '' : 'The model detected nothing on this tile at this confidence.'}
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Detected</TableHead>
+                  <TableHead className="text-right">Confidence</TableHead>
+                  <TableHead className="text-right">Size</TableHead>
+                  <TableHead className="text-right">Position</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...detections]
+                  .sort((a, b) => b.conf - a.conf)
+                  .map((d) => (
+                    <TableRow key={d.id} onMouseEnter={() => setHoveredDet(d.id)} onMouseLeave={() => setHoveredDet(null)}>
+                      <TableCell>
+                        <span className="flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="inline-block size-2.5 shrink-0 rounded-full"
+                            style={{ background: MODEL_HEX[d.class] }}
+                          />
+                          {d.class === 'vessel' ? 'Vessel' : 'Fixed'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{d.conf.toFixed(2)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {Math.round(Math.max(d.w_px, d.h_px) * 10)} m
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {d.lat.toFixed(4)}, {d.lon.toFixed(4)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          )
+        ) : objects.length === 0 ? (
           <p className="text-sm text-muted-foreground">No labelled objects: empty sea tile.</p>
         ) : (
           <Table>

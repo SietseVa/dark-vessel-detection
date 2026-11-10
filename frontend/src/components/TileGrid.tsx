@@ -1,8 +1,8 @@
-import type { Tile } from '@/api'
+import type { DetectionCounts, Tile } from '@/api'
 import { tileThumbUrl } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { CATEGORIES } from '@/theme'
+import { CATEGORIES, MODEL_HEX } from '@/theme'
 import { cn } from '@/lib/utils'
 import { Swatch } from './Swatch'
 
@@ -12,18 +12,22 @@ export function TileGrid({
   tiles,
   selected,
   onSelect,
+  detCounts,
 }: {
   tiles: Tile[]
   selected: string | null
   onSelect: (id: string) => void
+  /** Model-only mode: badge each tile with its detections instead of its labels. */
+  detCounts: Map<string, DetectionCounts> | null
 }) {
+  const order = detCounts ? 'most detected vessels first' : 'most dark vessels first'
   return (
     <ScrollArea className="h-full">
       <div className="p-4">
         <p className="mb-3 text-sm text-muted-foreground">
           {tiles.length > PAGE
-            ? `Showing the first ${PAGE} of ${tiles.length} tiles, most dark vessels first. Pick a scene to narrow down.`
-            : `${tiles.length} tiles, most dark vessels first`}
+            ? `Showing the first ${PAGE} of ${tiles.length} tiles, ${order}. Pick a scene to narrow down.`
+            : `${tiles.length} tiles, ${order}`}
         </p>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2">
           {tiles.slice(0, PAGE).map((t) => (
@@ -43,7 +47,17 @@ export function TileGrid({
                 className="size-full brightness-[1.6]"
               />
               <span className="absolute bottom-1.5 left-1.5 flex gap-1">
-                {CATEGORIES.map((c) =>
+                {detCounts
+                  ? (['vessel', 'non_vessel'] as const).map((c) => {
+                      const n = detCounts.get(t.tile_id)?.[c]
+                      return n ? (
+                        <Badge key={c} variant="secondary" className="gap-1 px-1.5 tabular-nums">
+                          <span aria-hidden className="size-2 rounded-full" style={{ background: MODEL_HEX[c] }} />
+                          {n}
+                        </Badge>
+                      ) : null
+                    })
+                  : CATEGORIES.map((c) =>
                   t.counts[c] ? (
                     <Badge key={c} variant="secondary" className="gap-1 px-1.5 tabular-nums">
                       <Swatch category={c} className="size-2" />
