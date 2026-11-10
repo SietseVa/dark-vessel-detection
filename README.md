@@ -100,21 +100,49 @@ een tegelbrowser met de labels over het radarbeeld, en grafieken per scène, len
   objecten (fout < 10 m) om elke tegel op de kaart te zetten.
 - `frontend/`: React + Vite + TypeScript, shadcn/ui (Tailwind), MapLibre + deck.gl, Recharts.
 
-**Vereisten:** [uv](https://docs.astral.sh/uv/) en Node.js 20+. De dataset staat in `data/xview3_tiles/` (gitignored).
+### Dashboard starten
 
-Start de API (vanuit de root van de repo):
+**Vereisten:** [uv](https://docs.astral.sh/uv/) en Node.js 20+. De dataset staat in `data/` of
+`data/xview3_tiles/` (gitignored); een eigen pad kan met `DATA_DIR=...`.
 
-```bash
-uv run uvicorn backend.main:app --reload --port 8000
-```
+1. **Haal de nieuwste versie van `main` op** (vanuit de root van de repo):
 
-Start de frontend in een tweede terminal:
+   ```bash
+   git switch main
+   git pull
+   ```
 
-```bash
-cd frontend && npm install && npm run dev
-```
+   `data/` en `runs/` staan niet in git en blijven dus gewoon staan.
 
-Open daarna http://localhost:5180. De frontend stuurt `/api` door naar poort 8000.
+2. **Installeer de Python-pakketten** (FastAPI, Ultralytics, ...):
+
+   ```bash
+   uv sync
+   ```
+
+3. **Installeer Node.js** (eenmalig, voor de frontend):
+
+   ```bash
+   brew install node
+   ```
+
+   Liever niets installeren? Zet dan `uvx --from nodejs-wheel` vóór elk `npm`-commando, bijvoorbeeld
+   `uvx --from nodejs-wheel npm install`.
+
+4. **Start de app in twee terminals:**
+
+   ```bash
+   # terminal 1: de API
+   uv run uvicorn backend.main:app --reload --port 8000
+
+   # terminal 2: de frontend
+   cd frontend && npm install && npm run dev
+   ```
+
+5. Open http://localhost:5180. De frontend stuurt `/api` door naar poort 8000.
+
+Krijg je een foutmelding dat poort 8000 of 5180 al in gebruik is, dan draait de app nog ergens anders.
+Stop die eerst.
 
 ### YOLO-model in het dashboard
 
@@ -134,3 +162,12 @@ Zonder gewichten werkt het dashboard gewoon, alleen zonder modelresultaten.
 - Een detectie telt als gevonden binnen 200 m (20 px) van een label, net als bij xView3. Op de kaart zijn
   gemiste objecten hol, en detecties zonder label donkere ringen: vals alarm, of een schip dat niet gelabeld is.
 - Het model is op de train-tegels getraind: kijk naar de **Validation**-split voor een eerlijke score.
+- Met de knop **Labels / Model / Both** bovenaan kies je wat je ziet. *Model* toont alleen wat het model
+  gedetecteerd heeft (roze = schip, groen = vast object), zonder de labels uit de dataset. *Both* toont de
+  labels, gemarkeerd als gevonden of gemist.
+- De betrouwbaarheidsdrempel start op de waarde met de beste F1 voor schepen op de validatieset; met de
+  schuifregelaar pas je hem aan.
+
+**Modelgewichten staan niet in git.** Zet een getraind model in `runs/<naam>/weights/best.pt` (bijvoorbeeld
+via de gedeelde map van het team) en draai daarna `uv run python -m backend.predict`. Dat is alleen nodig
+als je een nieuw model toevoegt: de resultaten worden bewaard in `data/cache/predictions/`.
