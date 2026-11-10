@@ -1,9 +1,6 @@
-import { useState } from 'react'
-import type { DetectionCounts, Tile } from '@/api'
+import type { Category, DetectionCounts, Tile } from '@/api'
 import { tileThumbUrl } from '@/api'
 import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { CATEGORIES, MODEL_FILL } from '@/theme'
 import { cn } from '@/lib/utils'
@@ -11,12 +8,19 @@ import { Swatch } from './Swatch'
 
 const PAGE = 240
 
+/** How the model did on one tile (Both mode). */
+export interface TileScore {
+  total: Record<Category, number>
+  found: Record<Category, number>
+}
+
 export function TileGrid({
   tiles,
   selected,
   onSelect,
   showLabels,
   detCounts,
+  scores,
 }: {
   tiles: Tile[]
   selected: string | null
@@ -25,14 +29,10 @@ export function TileGrid({
   showLabels: boolean
   /** Badge each tile with its model detections; null when there are none to show. */
   detCounts: Map<string, DetectionCounts> | null
+  /** Both mode: found/missed per tile; tiles missing from the map were not run through the model. */
+  scores: Map<string, TileScore> | null
 }) {
-  const order = showLabels ? 'most dark vessels first' : 'most detected vessels first'
-  // In Both mode either row of badges can be hidden.
-  const both = showLabels && detCounts != null
-  const [labelBadges, setLabelBadges] = useState(true)
-  const [modelBadges, setModelBadges] = useState(true)
-  const labelsOn = showLabels && (!both || labelBadges)
-  const modelOn = detCounts != null && (!both || modelBadges)
+  const order = 'most labelled dark vessels first'
   return (
     <ScrollArea className="h-full">
       <div className="p-4">
@@ -42,18 +42,6 @@ export function TileGrid({
               ? `Showing the first ${PAGE} of ${tiles.length} tiles, ${order}. Pick a scene to narrow down.`
               : `${tiles.length} tiles, ${order}`}
           </p>
-          {both && (
-            <div className="ml-auto flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Checkbox id="grid-labels" checked={labelBadges} onCheckedChange={(v) => setLabelBadges(v === true)} />
-                <Label htmlFor="grid-labels">Labels</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Checkbox id="grid-model" checked={modelBadges} onCheckedChange={(v) => setModelBadges(v === true)} />
-                <Label htmlFor="grid-model">Detections</Label>
-              </div>
-            </div>
-          )}
         </div>
         <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2">
           {tiles.slice(0, PAGE).map((t) => (
@@ -72,32 +60,44 @@ export function TileGrid({
                 loading="lazy"
                 className="size-full brightness-[1.6]"
               />
-              <span className="absolute inset-x-1.5 bottom-1.5 flex flex-col items-start gap-1">
-                {labelsOn && (
-                  <span className="flex gap-1" title="Labels">
-                    {CATEGORIES.map((c) =>
-                      t.counts[c] ? (
+              {/* Badges stacked, one per line. Both mode: labels as found / total. */}
+              <span className="absolute bottom-1.5 left-1.5 flex flex-col items-start gap-1">
+                {showLabels
+                  ? CATEGORIES.map((c) => {
+                      const score = scores?.get(t.tile_id)
+                      if (score) {
+                        const found = score.found[c]
+                        const total = score.total[c]
+                        return total ? (
+                          <Badge
+                            key={c}
+                            variant="secondary"
+                            className="gap-1 px-1.5 tabular-nums"
+                            title={`${found} of ${total} found and classified correctly`}
+                          >
+                            <Swatch category={c} className="size-2" />
+                            {found}
+                            <span className="text-muted-foreground">/{total}</span>
+                          </Badge>
+                        ) : null
+                      }
+                      return t.counts[c] ? (
                         <Badge key={c} variant="secondary" className="gap-1 px-1.5 tabular-nums">
                           <Swatch category={c} className="size-2" />
                           {t.counts[c]}
                         </Badge>
-                      ) : null,
-                    )}
-                  </span>
-                )}
-                {modelOn && detCounts && (
-                  <span className="flex gap-1" title="Detections">
-                    {(['vessel', 'non_vessel'] as const).map((c) => {
+                      ) : null
+                    })
+                  : detCounts &&
+                    (['vessel', 'non_vessel'] as const).map((c) => {
                       const n = detCounts.get(t.tile_id)?.[c]
                       return n ? (
-                        <Badge key={c} variant="outline" className="gap-1 bg-background/80 px-1.5 tabular-nums">
+                        <Badge key={c} variant="secondary" className="gap-1 px-1.5 tabular-nums">
                           <span aria-hidden className="size-2 rounded-full" style={{ background: MODEL_FILL[c] }} />
                           {n}
                         </Badge>
                       ) : null
                     })}
-                  </span>
-                )}
               </span>
             </button>
           ))}

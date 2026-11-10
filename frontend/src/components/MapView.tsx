@@ -165,7 +165,6 @@ export function MapView({
       return {
         html: `<div class="mb-1 flex items-center gap-2 font-medium"><span class="inline-block size-2.5 rounded-full" style="background:${CATEGORY_HEX[o.category]}"></span>${CATEGORY_LABEL[o.category]}</div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Length</span><span class="font-mono font-medium text-foreground tabular-nums">${o.length_m != null ? o.length_m.toFixed(0) + ' m' : 'unknown'}</span></div>
-          <div class="flex justify-between gap-6 text-muted-foreground"><span>Fishing</span><span class="font-mono font-medium text-foreground tabular-nums">${o.is_fishing == null ? 'unknown' : o.is_fishing ? 'yes' : 'no'}</span></div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Label source</span><span class="font-mono font-medium text-foreground tabular-nums">${o.source}</span></div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Shore distance</span><span class="font-mono font-medium text-foreground tabular-nums">${o.dist_shore_km != null ? o.dist_shore_km.toFixed(1) + ' km' : 'unknown'}</span></div>
           ${model}

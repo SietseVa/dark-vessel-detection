@@ -35,13 +35,18 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
   const [loaded, setLoaded] = useState<{ id: string; im: HTMLImageElement } | null>(null)
   const img = loaded?.id === tile.tile_id ? loaded.im : null
   const [channel, setChannel] = useState<Channel>('rgb')
-  const [gain, setGain] = useState(2)
+  const [gain, setGain] = useState(1)
   const [showBoxes, setShowBoxes] = useState(true)
   const [hovered, setHovered] = useState<number | null>(null)
   const [showModel, setShowModel] = useState(true)
   // Enlarged: the viewer fills the main area and the image grows to the available height.
   const [expanded, setExpanded] = useState(false)
   const [hoveredDet, setHoveredDet] = useState<string | null>(null)
+  // Zoom and pan of the enlarged image, in screen pixels; tied to the tile so it resets on a new one.
+  const [zoomState, setZoom] = useState({ id: '', k: 1, x: 0, y: 0 })
+  const zoom = expanded && zoomState.id === tile.tile_id ? zoomState : { id: tile.tile_id, k: 1, x: 0, y: 0 }
+  const frameRef = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ px: number; py: number; x: number; y: number; moved: boolean } | null>(null)
   const [dets, setDets] = useState<{ id: string; dets: Detection[] | null; error?: string } | null>(null)
   const allDetections = dets?.id === tile.tile_id ? dets.dets : null
   const detError = dets?.id === tile.tile_id ? dets.error : undefined
@@ -62,9 +67,35 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
 
   const detections = (allDetections ?? []).filter((d) => d.conf >= MIN_CONF)
   // Object id -> class of the best detection matched to it.
-  const found = new Map<number, Detection['class']>()
-  for (const d of detections) if (d.match_id != null && !found.has(d.match_id)) found.set(d.match_id, d.class)
+  const found = new Map<number, Detection>()
+  for (const d of detections) if (d.match_id != null && !found.has(d.match_id)) found.set(d.match_id, d)
   const unmatched = detections.filter((d) => d.match_id == null)
+
+  // Hovering a table row highlights its boxes and dims the rest.
+  const anyHot = hovered != null || hoveredDet != null
+  const labelHot = (o: VesselObject) => hovered === o.id
+  const detHot = (d: Detection) => hoveredDet === d.id || (d.match_id != null && hovered === d.match_id)
+
+  // Wheel zoom around the cursor (enlarged only). Non-passive so the page does not scroll.
+  useEffect(() => {
+    const el = frameRef.current
+    if (!el || !expanded) return
+    const id = tile.tile_id
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const px = e.clientX - rect.left
+      const py = e.clientY - rect.top
+      setZoom((z) => {
+        const cur = z.id === id ? z : { id, k: 1, x: 0, y: 0 }
+        const k = Math.min(16, Math.max(1, cur.k * Math.exp(-e.deltaY * 0.002)))
+        const f = k / cur.k
+        return clampZoom({ id, k, x: px - (px - cur.x) * f, y: py - (py - cur.y) * f }, rect.width)
+      })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [expanded, tile.tile_id])
 
   useEffect(() => {
     let cancelled = false
@@ -193,7 +224,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                 <span
                   className={cn(
                     'h-0.5 w-4',
-                    !modelOnly && '[mask-image:repeating-linear-gradient(90deg,#000_0_4px,transparent_4px_7px)]',
+                    '[mask-image:repeating-linear-gradient(90deg,#000_0_4px,transparent_4px_7px)]',
                   )}
                   style={{ background: MODEL_FILL[c] }}
                 />{' '}
@@ -216,22 +247,47 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
         {/* Enlarged, the image is the largest square that fits its cell (container query units). */}
         <div className={cn('shrink-0', expanded && 'grid place-items-center')} style={expanded ? { containerType: 'size' } : undefined}>
         <div
+          ref={frameRef}
           className={cn(
-            'relative shrink-0 overflow-hidden rounded-lg bg-black',
-            expanded ? 'cursor-zoom-out' : 'aspect-square cursor-zoom-in',
+            'relative shrink-0 touch-none overflow-hidden rounded-lg bg-black select-none',
+            expanded ? (zoom.k > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in') : 'aspect-square cursor-zoom-in',
           )}
           style={expanded ? { width: 'min(100cqw, 100cqh)', height: 'min(100cqw, 100cqh)' } : undefined}
-          onClick={() => setExpanded((v) => !v)}
-          title={expanded ? 'Click to shrink' : 'Click to enlarge'}
+          title={expanded ? undefined : 'Click to enlarge'}
+          onPointerDown={(e) => {
+            drag.current = { px: e.clientX, py: e.clientY, x: zoom.x, y: zoom.y, moved: false }
+            e.currentTarget.setPointerCapture(e.pointerId)
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current
+            if (!d) return
+            const dx = e.clientX - d.px
+            const dy = e.clientY - d.py
+            if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true
+            if (expanded && d.moved && zoom.k > 1) {
+              const size = e.currentTarget.getBoundingClientRect().width
+              setZoom(clampZoom({ id: tile.tile_id, k: zoom.k, x: d.x + dx, y: d.y + dy }, size))
+            }
+          }}
+          onPointerUp={() => {
+            if (drag.current && !drag.current.moved && !expanded) setExpanded(true)
+            drag.current = null
+          }}
+          onDoubleClick={() => expanded && setZoom({ id: tile.tile_id, k: 1, x: 0, y: 0 })}
         >
+          <div
+            className="absolute inset-0 origin-top-left"
+            style={{ transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.k})` }}
+          >
           <canvas ref={canvasRef} width={640} height={640} className="absolute inset-0 size-full [image-rendering:pixelated]" />
           {!img && <div className="absolute inset-0 grid place-content-center text-sm text-muted-foreground">Loading…</div>}
           {showBoxes && !modelOnly && (
-            <svg viewBox="0 0 640 640" className="absolute inset-0 size-full">
+            <svg viewBox="0 0 640 640" className="pointer-events-none absolute inset-0 size-full">
               {objects.map((o) => {
                 const pad = 4
                 const w = Math.max(o.w_px, 10) + pad * 2
                 const h = Math.max(o.h_px, 10) + pad * 2
+                const hot = labelHot(o)
                 return (
                   <rect
                     key={o.id}
@@ -240,9 +296,10 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                     width={w}
                     height={h}
                     rx={2}
-                    fill="none"
+                    fill={hot ? 'rgba(255,255,255,0.15)' : 'none'}
                     stroke={CATEGORY_HEX[o.category]}
-                    strokeWidth={hovered === o.id ? 3.5 : 2}
+                    strokeWidth={(hot ? 4 : 2) / zoom.k}
+                    opacity={anyHot && !hot ? 0.3 : 1}
                   />
                 )
               })}
@@ -260,25 +317,31 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
               {detections.map((d) => {
                 const w = Math.max(d.w_px, 10)
                 const h = Math.max(d.h_px, 10)
-                // Colour by predicted class; dashed next to the labels so they never read as labels.
+                // Colour by predicted class; always dashed so they never read as labels.
                 const color = d.class === 'vessel' ? 'url(#vessel-split)' : MODEL_HEX.non_vessel
-                const strong = modelOnly ? hoveredDet === d.id : d.match_id != null && hovered === d.match_id
+                const hot = detHot(d)
                 return (
-                  <g key={d.id}>
-                    <rect
-                      x={d.x_px - w / 2}
-                      y={d.y_px - h / 2}
-                      width={w}
-                      height={h}
-                      fill="none"
-                      stroke={color}
-                      strokeWidth={strong ? 3 : 2}
-                      strokeDasharray={modelOnly ? undefined : '4 3'}
-                    />
-                  </g>
+                  <rect
+                    key={d.id}
+                    x={d.x_px - w / 2}
+                    y={d.y_px - h / 2}
+                    width={w}
+                    height={h}
+                    fill={hot ? 'rgba(255,255,255,0.15)' : 'none'}
+                    stroke={color}
+                    strokeWidth={(hot ? 3.5 : 2) / zoom.k}
+                    strokeDasharray={`${4 / zoom.k} ${3 / zoom.k}`}
+                    opacity={anyHot && !hot ? 0.3 : 1}
+                  />
                 )
               })}
             </svg>
+          )}
+          </div>
+          {expanded && (
+            <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-xs text-white">
+              {zoom.k > 1 ? `${zoom.k.toFixed(1)}× · drag to pan · double-click to reset` : 'Scroll to zoom'}
+            </div>
           )}
         </div>
         </div>
@@ -336,9 +399,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                           {MODEL_SHORT[d.class]}
                         </span>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {Math.round(Math.max(d.w_px, d.h_px) * 10)} m
-                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{sizeM(d)}</TableCell>
                     </TableRow>
                   ))}
               </TableBody>
@@ -353,6 +414,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                 <TableHead>Type</TableHead>
                 {model && <TableHead>Detected</TableHead>}
                 <TableHead className="text-right">Length</TableHead>
+                {model && <TableHead className="text-right">Size</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -369,7 +431,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                       {allDetections == null ? (
                         '…'
                       ) : found.has(o.id) ? (
-                        <ModelClass cls={found.get(o.id)!} />
+                        <ModelClass cls={found.get(o.id)!.class} />
                       ) : (
                         <span className="text-muted-foreground">missed</span>
                       )}
@@ -378,16 +440,22 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                   <TableCell className="text-right tabular-nums">
                     {o.length_m != null ? `${o.length_m.toFixed(0)} m` : '–'}
                   </TableCell>
+                  {model && (
+                    <TableCell className="text-right tabular-nums">
+                      {found.has(o.id) ? sizeM(found.get(o.id)!) : '–'}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
               {model &&
                 unmatched.map((d) => (
-                  <TableRow key={d.id}>
+                  <TableRow key={d.id} onMouseEnter={() => setHoveredDet(d.id)} onMouseLeave={() => setHoveredDet(null)}>
                     <TableCell className="text-muted-foreground">no label</TableCell>
                     <TableCell>
                       <ModelClass cls={d.class} />
                     </TableCell>
                     <TableCell className="text-right">–</TableCell>
+                    <TableCell className="text-right tabular-nums">{sizeM(d)}</TableCell>
                   </TableRow>
                 ))}
             </TableBody>
@@ -406,4 +474,13 @@ function ModelClass({ cls }: { cls: Detection['class'] }) {
       {MODEL_SHORT[cls]}
     </span>
   )
+}
+
+/** Size of a detection box in metres (longest side; 10 m per pixel). */
+const sizeM = (d: Detection) => `${Math.round(Math.max(d.w_px, d.h_px) * 10)} m`
+
+/** Keep the zoomed image covering the frame (no empty edges while panning). */
+function clampZoom<T extends { k: number; x: number; y: number }>(z: T, size: number): T {
+  const min = size * (1 - z.k)
+  return { ...z, x: Math.min(0, Math.max(min, z.x)), y: Math.min(0, Math.max(min, z.y)) }
 }
