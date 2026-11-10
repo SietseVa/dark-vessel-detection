@@ -37,16 +37,22 @@ export function hexToRgb(hex: string): [number, number, number] {
 
 export const fmt = new Intl.NumberFormat('en-US')
 
-// Model detections in the tile viewer (drawn over dark radar, dashed so they never read as labels).
-export const DETECTION_HEX = {
-  matched: '#ffffff', // matches a label
-  unmatched: '#f2c94c', // nothing labelled here: false alarm, or a vessel the labels missed
+// Detections by predicted class. The model cannot tell AIS from dark, so its vessels are drawn
+// half AIS blue, half dark orange. MODEL_HEX is the single colour where a split is not possible
+// (map dots fill blue and get an orange ring; see MODEL_RING).
+export const MODEL_HEX = {
+  vessel: CATEGORY_HEX.ais,
+  non_vessel: CATEGORY_HEX.fixed,
 }
 
-// Detections by predicted class, for the model-only view. The model cannot tell AIS from dark, so
-// its vessels get their own colour instead of the AIS blue or dark orange.
-export const MODEL_HEX = {
-  vessel: '#c4307a',
+export const MODEL_RING = {
+  vessel: CATEGORY_HEX.dark,
+  non_vessel: '#ffffff',
+}
+
+/** CSS background for a detection dot: split blue/orange for vessels. */
+export const MODEL_FILL = {
+  vessel: `linear-gradient(90deg, ${CATEGORY_HEX.ais} 50%, ${CATEGORY_HEX.dark} 50%)`,
   non_vessel: CATEGORY_HEX.fixed,
 }
 
@@ -56,3 +62,11 @@ export const MODEL_LABEL = {
 }
 
 export type Layers = 'labels' | 'model' | 'both'
+
+export const MODEL_SHORT = {
+  vessel: 'Vessel',
+  non_vessel: 'Fixed',
+}
+
+// Detections below this confidence are hidden everywhere in the dashboard.
+export const MIN_CONF = 0.15

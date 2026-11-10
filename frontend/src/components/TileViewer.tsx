@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import type { Detection, Tile, VesselObject } from '@/api'
 import { loadTileDetections, tileImageUrl } from '@/api'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,8 @@ import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { CATEGORY_HEX, CATEGORY_SHORT, DETECTION_HEX, MODEL_HEX, MODEL_LABEL, type Layers } from '@/theme'
+import { CATEGORY_HEX, CATEGORY_SHORT, MIN_CONF, MODEL_FILL, MODEL_HEX, MODEL_LABEL, MODEL_SHORT, type Layers } from '@/theme'
+import { cn } from '@/lib/utils'
 import { Swatch } from './Swatch'
 
 type Channel = 'rgb' | 'vv' | 'vh'
@@ -24,13 +25,11 @@ interface Props {
   onClose: () => void
   /** Run name of the YOLO model, or null when no model is available. */
   model: string | null
-  minConf: number
-  onMinConf: (v: number) => void
   /** 'model' hides everything that comes from the dataset labels. */
   layers: Layers
 }
 
-export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClose, model, minConf, onMinConf, layers }: Props) {
+export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClose, model, layers }: Props) {
   const modelOnly = layers === 'model'
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [loaded, setLoaded] = useState<{ id: string; im: HTMLImageElement } | null>(null)
@@ -40,6 +39,8 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
   const [showBoxes, setShowBoxes] = useState(true)
   const [hovered, setHovered] = useState<number | null>(null)
   const [showModel, setShowModel] = useState(true)
+  // Enlarged: the viewer fills the main area and the image grows to the available height.
+  const [expanded, setExpanded] = useState(false)
   const [hoveredDet, setHoveredDet] = useState<string | null>(null)
   const [dets, setDets] = useState<{ id: string; dets: Detection[] | null; error?: string } | null>(null)
   const allDetections = dets?.id === tile.tile_id ? dets.dets : null
@@ -59,8 +60,10 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
     }
   }, [tile.tile_id, model])
 
-  const detections = (allDetections ?? []).filter((d) => d.conf >= minConf)
-  const foundConf = new Map(detections.filter((d) => d.match_id != null).map((d) => [d.match_id!, d.conf]))
+  const detections = (allDetections ?? []).filter((d) => d.conf >= MIN_CONF)
+  // Object id -> class of the best detection matched to it.
+  const found = new Map<number, Detection['class']>()
+  for (const d of detections) if (d.match_id != null && !found.has(d.match_id)) found.set(d.match_id, d.class)
   const unmatched = detections.filter((d) => d.match_id == null)
 
   useEffect(() => {
@@ -99,16 +102,24 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement
       if (el.closest('input, [role="slider"], [role="combobox"]')) return
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        if (expanded) setExpanded(false)
+        else onClose()
+      }
       if (e.key === 'ArrowLeft') onPrev()
       if (e.key === 'ArrowRight') onNext()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, onPrev, onNext])
+  }, [onClose, onPrev, onNext, expanded])
 
   return (
-    <Card className="absolute inset-y-3 right-3 z-10 w-[min(520px,calc(100%-1.5rem))] gap-4 overflow-y-auto shadow-xl">
+    <Card
+      className={cn(
+        'absolute z-10 gap-4 shadow-xl',
+        expanded ? 'inset-3' : 'inset-y-3 right-3 w-[min(520px,calc(100%-1.5rem))]',
+      )}
+    >
       <CardHeader>
         <CardDescription className="text-xs uppercase tracking-wide">
           {tile.split} · scene {tile.scene_id.slice(0, 8)}
@@ -126,13 +137,23 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
           <Button variant="outline" size="icon-sm" onClick={onNext} aria-label="Next tile" title="Next (→)">
             <ChevronRight />
           </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setExpanded((v) => !v)}
+            aria-label={expanded ? 'Shrink' : 'Enlarge'}
+            title={expanded ? 'Shrink (Esc)' : 'Enlarge (or click the image)'}
+          >
+            {expanded ? <Minimize2 /> : <Maximize2 />}
+          </Button>
           <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close" title="Close (Esc)">
             <X />
           </Button>
         </CardAction>
       </CardHeader>
 
-      <CardContent className="flex flex-col gap-4">
+      {/* Options stay in view; only the part below them scrolls. */}
+      <CardContent className="flex shrink-0 flex-col gap-4">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <ToggleGroup
             type="single"
@@ -150,45 +171,59 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
             <Label className="text-muted-foreground">Brightness</Label>
             <Slider className="w-28" min={1} max={10} step={0.5} value={[gain]} onValueChange={([v]) => setGain(v)} />
           </div>
-          <div className="flex items-center gap-2">
-            <Checkbox id="boxes" checked={showBoxes} onCheckedChange={(v) => setShowBoxes(v === true)} />
-            <Label htmlFor="boxes">{modelOnly ? 'Detections' : 'Labels'}</Label>
-          </div>
-          {model && !modelOnly && (
+          {/* Kept together so Labels always sits right in front of Model. */}
+          <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <Checkbox id="model-boxes" checked={showModel} onCheckedChange={(v) => setShowModel(v === true)} />
-              <Label htmlFor="model-boxes">Model</Label>
+              <Checkbox id="boxes" checked={showBoxes} onCheckedChange={(v) => setShowBoxes(v === true)} />
+              <Label htmlFor="boxes">{modelOnly ? 'Detections' : 'Labels'}</Label>
             </div>
-          )}
+            {model && !modelOnly && (
+              <div className="flex items-center gap-2">
+                <Checkbox id="model-boxes" checked={showModel} onCheckedChange={(v) => setShowModel(v === true)} />
+                <Label htmlFor="model-boxes">Detections</Label>
+              </div>
+            )}
+          </div>
         </div>
 
         {model && (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
-            <div className="flex items-center gap-3">
-              <Label className="text-muted-foreground">Confidence ≥ {minConf.toFixed(2)}</Label>
-              <Slider className="w-28" min={0.05} max={0.95} step={0.05} value={[minConf]} onValueChange={([v]) => onMinConf(v)} />
-            </div>
-            {modelOnly ? (
-              (['vessel', 'non_vessel'] as const).map((c) => (
-                <span key={c} className="flex items-center gap-1.5">
-                  <span className="w-4 border-t-2" style={{ borderColor: MODEL_HEX[c] }} /> {MODEL_LABEL[c]}
-                </span>
-              ))
-            ) : (
-              <>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-4 border-t-2 border-dashed" style={{ borderColor: '#9ca3af' }} /> matches a label
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-4 border-t-2 border-dashed" style={{ borderColor: DETECTION_HEX.unmatched }} /> no
-                  label
-                </span>
-              </>
-            )}
+            {(['vessel', 'non_vessel'] as const).map((c) => (
+              <span key={c} className="flex items-center gap-1.5">
+                <span
+                  className={cn(
+                    'h-0.5 w-4',
+                    !modelOnly && '[mask-image:repeating-linear-gradient(90deg,#000_0_4px,transparent_4px_7px)]',
+                  )}
+                  style={{ background: MODEL_FILL[c] }}
+                />{' '}
+                {MODEL_LABEL[c]}
+              </span>
+            ))}
           </div>
         )}
 
-        <div className="relative aspect-square shrink-0 overflow-hidden rounded-lg bg-black">
+      </CardContent>
+
+      <CardContent
+        className={cn(
+          'min-h-0 flex-1',
+          expanded
+            ? 'grid grid-rows-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_360px]'
+            : 'flex flex-col gap-4 overflow-y-auto',
+        )}
+      >
+        {/* Enlarged, the image is the largest square that fits its cell (container query units). */}
+        <div className={cn('shrink-0', expanded && 'grid place-items-center')} style={expanded ? { containerType: 'size' } : undefined}>
+        <div
+          className={cn(
+            'relative shrink-0 overflow-hidden rounded-lg bg-black',
+            expanded ? 'cursor-zoom-out' : 'aspect-square cursor-zoom-in',
+          )}
+          style={expanded ? { width: 'min(100cqw, 100cqh)', height: 'min(100cqw, 100cqh)' } : undefined}
+          onClick={() => setExpanded((v) => !v)}
+          title={expanded ? 'Click to shrink' : 'Click to enlarge'}
+        >
           <canvas ref={canvasRef} width={640} height={640} className="absolute inset-0 size-full [image-rendering:pixelated]" />
           {!img && <div className="absolute inset-0 grid place-content-center text-sm text-muted-foreground">Loading…</div>}
           {showBoxes && !modelOnly && (
@@ -215,15 +250,18 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
           )}
           {model && (modelOnly ? showBoxes : showModel) && (
             <svg viewBox="0 0 640 640" className="pointer-events-none absolute inset-0 size-full">
+              <defs>
+                {/* Vessel boxes: left half AIS blue, right half dark orange. */}
+                <linearGradient id="vessel-split">
+                  <stop offset="50%" stopColor={CATEGORY_HEX.ais} />
+                  <stop offset="50%" stopColor={CATEGORY_HEX.dark} />
+                </linearGradient>
+              </defs>
               {detections.map((d) => {
                 const w = Math.max(d.w_px, 10)
                 const h = Math.max(d.h_px, 10)
-                // Model-only: colour by predicted class, solid. Otherwise: by whether a label matches.
-                const color = modelOnly
-                  ? MODEL_HEX[d.class]
-                  : d.match_id == null
-                    ? DETECTION_HEX.unmatched
-                    : DETECTION_HEX.matched
+                // Colour by predicted class; dashed next to the labels so they never read as labels.
+                const color = d.class === 'vessel' ? 'url(#vessel-split)' : MODEL_HEX.non_vessel
                 const strong = modelOnly ? hoveredDet === d.id : d.match_id != null && hovered === d.match_id
                 return (
                   <g key={d.id}>
@@ -234,29 +272,18 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                       height={h}
                       fill="none"
                       stroke={color}
-                      strokeWidth={strong ? 3 : modelOnly ? 2 : 1.5}
+                      strokeWidth={strong ? 3 : 2}
                       strokeDasharray={modelOnly ? undefined : '4 3'}
                     />
-                    <text
-                      x={d.x_px - w / 2}
-                      y={d.y_px - h / 2 - 3}
-                      fill={color}
-                      fontSize={12}
-                      fontFamily="ui-monospace, monospace"
-                      paintOrder="stroke"
-                      stroke="#000"
-                      strokeWidth={3}
-                    >
-                      {d.class === 'non_vessel' ? 'fixed ' : ''}
-                      {d.conf.toFixed(2)}
-                    </text>
                   </g>
                 )
               })}
             </svg>
           )}
         </div>
+        </div>
 
+        <div className={cn('flex flex-col gap-4', expanded && 'hidden min-h-0 overflow-y-auto lg:flex')}>
         {model && (
           <p className="text-xs text-muted-foreground">
             {detError ? (
@@ -266,7 +293,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
             ) : (
               <>
                 {model}: {detections.length} detection{detections.length === 1 ? '' : 's'}
-                {!modelOnly && objects.length > 0 && <> · found {foundConf.size} of {objects.length} labels</>}
+                {!modelOnly && objects.length > 0 && <> · found {found.size} of {objects.length} labels</>}
                 {!modelOnly && unmatched.length > 0 && <> · {unmatched.length} without a label</>}
               </>
             )}
@@ -291,9 +318,7 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
               <TableHeader>
                 <TableRow>
                   <TableHead>Detected</TableHead>
-                  <TableHead className="text-right">Confidence</TableHead>
                   <TableHead className="text-right">Size</TableHead>
-                  <TableHead className="text-right">Position</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -306,35 +331,28 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                           <span
                             aria-hidden
                             className="inline-block size-2.5 shrink-0 rounded-full"
-                            style={{ background: MODEL_HEX[d.class] }}
+                            style={{ background: MODEL_FILL[d.class] }}
                           />
-                          {d.class === 'vessel' ? 'Vessel' : 'Fixed'}
+                          {MODEL_SHORT[d.class]}
                         </span>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{d.conf.toFixed(2)}</TableCell>
                       <TableCell className="text-right tabular-nums">
                         {Math.round(Math.max(d.w_px, d.h_px) * 10)} m
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {d.lat.toFixed(4)}, {d.lon.toFixed(4)}
                       </TableCell>
                     </TableRow>
                   ))}
               </TableBody>
             </Table>
           )
-        ) : objects.length === 0 ? (
+        ) : objects.length === 0 && !(model && unmatched.length) ? (
           <p className="text-sm text-muted-foreground">No labelled objects: empty sea tile.</p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Type</TableHead>
+                {model && <TableHead>Detected</TableHead>}
                 <TableHead className="text-right">Length</TableHead>
-                <TableHead>Fishing</TableHead>
-                <TableHead>Source</TableHead>
-                <TableHead className="text-right">Shore</TableHead>
-                {model && <TableHead className="text-right">Model</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -346,27 +364,46 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
                       {CATEGORY_SHORT[o.category]}
                     </span>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {o.length_m != null ? `${o.length_m.toFixed(0)} m` : '–'}
-                  </TableCell>
-                  <TableCell>{o.is_fishing == null ? '–' : o.is_fishing ? 'yes' : 'no'}</TableCell>
-                  <TableCell>{o.source}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {o.dist_shore_km != null ? `${o.dist_shore_km.toFixed(1)} km` : '–'}
-                  </TableCell>
                   {model && (
-                    <TableCell className="text-right tabular-nums">
-                      {allDetections == null ? '…' : foundConf.has(o.id) ? foundConf.get(o.id)!.toFixed(2) : (
+                    <TableCell>
+                      {allDetections == null ? (
+                        '…'
+                      ) : found.has(o.id) ? (
+                        <ModelClass cls={found.get(o.id)!} />
+                      ) : (
                         <span className="text-muted-foreground">missed</span>
                       )}
                     </TableCell>
                   )}
+                  <TableCell className="text-right tabular-nums">
+                    {o.length_m != null ? `${o.length_m.toFixed(0)} m` : '–'}
+                  </TableCell>
                 </TableRow>
               ))}
+              {model &&
+                unmatched.map((d) => (
+                  <TableRow key={d.id}>
+                    <TableCell className="text-muted-foreground">no label</TableCell>
+                    <TableCell>
+                      <ModelClass cls={d.class} />
+                    </TableCell>
+                    <TableCell className="text-right">–</TableCell>
+                  </TableRow>
+                ))}
             </TableBody>
           </Table>
         )}
+        </div>
       </CardContent>
     </Card>
+  )
+}
+
+function ModelClass({ cls }: { cls: Detection['class'] }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span aria-hidden className="inline-block size-2.5 shrink-0 rounded-full" style={{ background: MODEL_FILL[cls] }} />
+      {MODEL_SHORT[cls]}
+    </span>
   )
 }

@@ -7,7 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import '../maplibre-setup'
 
 import type { Detection, DetectionCounts, Scene, Tile, VesselObject } from '@/api'
-import { CATEGORY_HEX, CATEGORY_LABEL, MODEL_HEX, MODEL_LABEL, hexToRgb, type Layers } from '@/theme'
+import { CATEGORY_HEX, CATEGORY_LABEL, MODEL_FILL, MODEL_HEX, MODEL_LABEL, MODEL_RING, MODEL_SHORT, hexToRgb, type Layers } from '@/theme'
 
 const BASEMAP = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 const WORLD_BOUNDS: [number, number, number, number] = [-26, 1, 19, 67]
@@ -35,8 +35,8 @@ interface Props {
   focusScene: string | null
   selectedTile: string | null
   onSelectTile: (id: string) => void
-  /** Object id -> confidence of the detection matched to it; null when no predictions are loaded. */
-  foundConf: Map<number, number> | null
+  /** Object id -> class the model gave it; null when no predictions are loaded. */
+  found: Map<number, Detection['class']> | null
   predictedTiles: Set<string>
   /** Detections to draw: all of them in model-only mode, else only those without a label. */
   detections: Detection[]
@@ -52,7 +52,7 @@ export function MapView({
   focusScene,
   selectedTile,
   onSelectTile,
-  foundConf,
+  found,
   predictedTiles,
   detections,
   layers: mode,
@@ -71,7 +71,7 @@ export function MapView({
   const sortedObjects = useMemo(() => [...objects].sort((a, b) => Z[a.category] - Z[b.category]), [objects])
 
   // With predictions loaded, objects the model missed are drawn hollow.
-  const missed = (o: VesselObject) => foundConf != null && predictedTiles.has(o.tile_id) && !foundConf.has(o.id)
+  const missed = (o: VesselObject) => found != null && predictedTiles.has(o.tile_id) && !found.has(o.id)
 
   const layers = [
     new PolygonLayer<Tile>({
@@ -114,7 +114,7 @@ export function MapView({
       pickable: true,
       autoHighlight: true,
       highlightColor: [10, 10, 10, 220],
-      updateTriggers: { getFillColor: [foundConf], getLineColor: [foundConf], getLineWidth: [foundConf] },
+      updateTriggers: { getFillColor: [found], getLineColor: [found], getLineWidth: [found] },
     }),
     new ScatterplotLayer<Detection>({
       id: 'detections',
@@ -128,9 +128,10 @@ export function MapView({
       filled: modelOnly,
       getFillColor: (d) => MODEL_RGB[d.class],
       stroked: true,
-      getLineColor: modelOnly ? [255, 255, 255, 230] : [30, 30, 30, 220],
+      // Vessels: blue fill with an orange ring (a dot cannot be split in half here).
+      getLineColor: (d) => (modelOnly ? [...hexToRgb(MODEL_RING[d.class]), 230] : [30, 30, 30, 220]),
       lineWidthUnits: 'pixels',
-      getLineWidth: modelOnly ? 1 : 2,
+      getLineWidth: (d) => (modelOnly ? (d.class === 'vessel' ? 2 : 1) : 2),
       updateTriggers: { getLineColor: modelOnly, getLineWidth: modelOnly },
       pickable: true,
       autoHighlight: true,
@@ -143,13 +144,12 @@ export function MapView({
     if (layer.id === 'detections') {
       const d = object as Detection
       const title = modelOnly
-        ? `<span class="inline-block size-2.5 rounded-full" style="background:${MODEL_HEX[d.class]}"></span>${MODEL_LABEL[d.class]}`
+        ? `<span class="inline-block size-2.5 rounded-full" style="background:${MODEL_FILL[d.class]}"></span>${MODEL_LABEL[d.class]}`
         : `<span class="inline-block size-2.5 rounded-full border-2 border-foreground"></span>Model detection, no label`
       const note = modelOnly ? 'Click to open tile' : 'False alarm, or a vessel the labels missed. Click to open tile'
       return {
         html: `<div class="mb-1 flex items-center gap-2 font-medium">${title}</div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Class</span><span class="font-mono font-medium text-foreground">${d.class}</span></div>
-          <div class="flex justify-between gap-6 text-muted-foreground"><span>Confidence</span><span class="font-mono font-medium text-foreground tabular-nums">${d.conf.toFixed(2)}</span></div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Position</span><span class="font-mono font-medium text-foreground tabular-nums">${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}</span></div>
           <div class="mt-1.5 text-xs text-muted-foreground">${note}</div>`,
         className: 'min-w-44 max-w-64 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-foreground shadow-xl',
@@ -159,9 +159,9 @@ export function MapView({
     if (layer.id === 'objects') {
       const o = object as VesselObject
       const model =
-        foundConf == null || !predictedTiles.has(o.tile_id)
+        found == null || !predictedTiles.has(o.tile_id)
           ? ''
-          : `<div class="flex justify-between gap-6 text-muted-foreground"><span>Model</span><span class="font-mono font-medium text-foreground tabular-nums">${foundConf.has(o.id) ? 'found ' + foundConf.get(o.id)!.toFixed(2) : 'missed'}</span></div>`
+          : `<div class="flex justify-between gap-6 text-muted-foreground"><span>Detected</span><span class="font-mono font-medium text-foreground tabular-nums">${found.has(o.id) ? MODEL_SHORT[found.get(o.id)!] : 'missed'}</span></div>`
       return {
         html: `<div class="mb-1 flex items-center gap-2 font-medium"><span class="inline-block size-2.5 rounded-full" style="background:${CATEGORY_HEX[o.category]}"></span>${CATEGORY_LABEL[o.category]}</div>
           <div class="flex justify-between gap-6 text-muted-foreground"><span>Length</span><span class="font-mono font-medium text-foreground tabular-nums">${o.length_m != null ? o.length_m.toFixed(0) + ' m' : 'unknown'}</span></div>

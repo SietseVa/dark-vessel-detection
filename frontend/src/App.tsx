@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Category, Dataset, Detection, DetectionCounts, ModelInfo, Predictions, Scene, Tile, VesselObject } from '@/api'
 import { loadDataset, loadModel, loadPredictions } from '@/api'
 import { DEFAULT_FILTERS, objectMatches, tileMatches, type Filters, type Fishing } from '@/filters'
-import { CATEGORIES, CATEGORY_HEX, CATEGORY_LABEL, MODEL_HEX, MODEL_LABEL, fmt, type Layers } from '@/theme'
+import { CATEGORIES, CATEGORY_HEX, CATEGORY_LABEL, MIN_CONF, MODEL_FILL, MODEL_LABEL, fmt, type Layers } from '@/theme'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -105,7 +105,6 @@ export default function App() {
   const [selectedTile, setSelectedTile] = useState<string | null>(null)
   const [model, setModel] = useState<ModelInfo | null>(null)
   const [predictions, setPredictions] = useState<Predictions | null>(null)
-  const [minConf, setMinConf] = useState(0.25)
   const [showModelOnMap, setShowModelOnMap] = useState(true)
   // What to show: dataset labels, model detections, or both (labels with found/missed marks).
   const [layers, setLayers] = useState<Layers>('labels')
@@ -116,7 +115,6 @@ export default function App() {
     loadModel().then(
       (m) => {
         setModel(m)
-        if (m.available && m.best_vessel_threshold) setMinConf(m.best_vessel_threshold.conf)
         if (m.available) setLayers('both')
         if (m.available && m.predicted_tiles > 0) loadPredictions().then(setPredictions, () => {})
       },
@@ -141,11 +139,11 @@ export default function App() {
     (): Detection[] =>
       (predictions?.detections ?? []).filter(
         (d) =>
-          d.conf >= minConf &&
+          d.conf >= MIN_CONF &&
           (filters.split === 'all' || d.split === filters.split) &&
           (!filters.scene || d.scene_id === filters.scene),
       ),
-    [predictions, minConf, filters.split, filters.scene],
+    [predictions, filters.split, filters.scene],
   )
   const detCounts = useMemo(() => {
     const m = new Map<string, DetectionCounts>()
@@ -217,21 +215,23 @@ export default function App() {
   // Model results. A labelled object counts as found when a detection above the threshold was
   // matched to it; only tiles the model has run on count.
   const predictedTiles = useMemo(() => new Set(predictions?.tile_ids ?? []), [predictions])
-  const foundConf = useMemo(() => {
-    const m = new Map<number, number>()
-    for (const d of predictions?.detections ?? []) if (d.match_id != null && d.conf >= minConf) m.set(d.match_id, d.conf)
+  // Object id -> class of the best detection matched to it.
+  const found = useMemo(() => {
+    const m = new Map<number, Detection['class']>()
+    for (const d of predictions?.detections ?? [])
+      if (d.match_id != null && d.conf >= MIN_CONF && !m.has(d.match_id)) m.set(d.match_id, d.class)
     return m
-  }, [predictions, minConf])
+  }, [predictions])
   const unmatched = useMemo(
     (): Detection[] =>
       (predictions?.detections ?? []).filter(
         (d) =>
           d.match_id == null &&
-          d.conf >= minConf &&
+          d.conf >= MIN_CONF &&
           (filters.split === 'all' || d.split === filters.split) &&
           (!filters.scene || d.scene_id === filters.scene),
       ),
-    [predictions, minConf, filters.split, filters.scene],
+    [predictions, filters.split, filters.scene],
   )
   const recall = useMemo(() => {
     const r: Record<Category, { found: number; total: number }> = {
@@ -242,10 +242,10 @@ export default function App() {
     for (const o of objects) {
       if (!predictedTiles.has(o.tile_id)) continue
       r[o.category].total++
-      if (foundConf.has(o.id)) r[o.category].found++
+      if (found.has(o.id)) r[o.category].found++
     }
     return r
-  }, [objects, predictedTiles, foundConf])
+  }, [objects, predictedTiles, found])
 
   const tileIndex = selectedTile ? tiles.findIndex((t) => t.tile_id === selectedTile) : -1
   const tile = selectedTile ? (data?.tiles.find((t) => t.tile_id === selectedTile) ?? null) : null
@@ -294,8 +294,8 @@ export default function App() {
 
             {modelOnly ? (
               <div className="grid grid-cols-3 gap-2">
-                <Kpi label="Vessels" value={detTotals.vessel} sub="detected" color={MODEL_HEX.vessel} />
-                <Kpi label="Fixed" value={detTotals.non_vessel} sub="detected" color={MODEL_HEX.non_vessel} />
+                <Kpi label="Vessels" value={detTotals.vessel} sub="detected" color={MODEL_FILL.vessel} />
+                <Kpi label="Fixed" value={detTotals.non_vessel} sub="detected" color={MODEL_FILL.non_vessel} />
                 <Kpi label="Tiles" value={detCounts.size} sub="with a detection" />
               </div>
             ) : (
@@ -318,30 +318,9 @@ export default function App() {
                       ? `run on ${fmt.format(predictedTiles.size)} of ${fmt.format(data.summary.n_tiles)} tiles`
                       : 'tiles are predicted when you open them'}
                   </CardDescription>
-                  {model.best_vessel_threshold && (
-                    <CardDescription>
-                      Best vessel F1 {model.best_vessel_threshold.f1.toFixed(2)} on validation (200 m match) at
-                      confidence {model.best_vessel_threshold.conf.toFixed(2)}
-                      {minConf !== model.best_vessel_threshold.conf && (
-                        <>
-                          {' · '}
-                          <Button
-                            variant="link"
-                            className="h-auto p-0 text-xs"
-                            onClick={() => setMinConf(model.best_vessel_threshold!.conf)}
-                          >
-                            use it
-                          </Button>
-                        </>
-                      )}
-                    </CardDescription>
-                  )}
+                  <CardDescription>Showing detections with confidence ≥ {MIN_CONF.toFixed(2)}</CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-2">
-                    <Label className="text-muted-foreground">Confidence ≥ {minConf.toFixed(2)}</Label>
-                    <Slider min={0.05} max={0.95} step={0.05} value={[minConf]} onValueChange={([v]) => setMinConf(v)} />
-                  </div>
                   {predictions && modelOnly ? (
                     <div className="flex flex-col gap-2 text-sm">
                       {(['vessel', 'non_vessel'] as const).map((c) => (
@@ -349,7 +328,7 @@ export default function App() {
                           <span
                             aria-hidden
                             className="inline-block size-2.5 shrink-0 rounded-full"
-                            style={{ background: MODEL_HEX[c] }}
+                            style={{ background: MODEL_FILL[c] }}
                           />
                           <span className="flex-1">{MODEL_LABEL[c]}</span>
                           <span className="tabular-nums text-muted-foreground">{fmt.format(detTotals[c])}</span>
@@ -580,7 +559,7 @@ export default function App() {
               focusScene={filters.scene}
               selectedTile={selectedTile}
               onSelectTile={setSelectedTile}
-              foundConf={predictions && layers === 'both' ? foundConf : null}
+              found={predictions && layers === 'both' ? found : null}
               predictedTiles={predictedTiles}
               detections={modelOnly ? shownDetections : layers === 'both' && showModelOnMap ? unmatched : []}
               layers={layers}
@@ -591,7 +570,8 @@ export default function App() {
               tiles={tiles}
               selected={selectedTile}
               onSelect={setSelectedTile}
-              detCounts={modelOnly ? detCounts : null}
+              showLabels={!modelOnly}
+              detCounts={layers !== 'labels' && predictions ? detCounts : null}
             />
           )}
           {tile && (
@@ -605,8 +585,6 @@ export default function App() {
               onClose={() => setSelectedTile(null)}
               model={model?.available && layers !== 'labels' ? model.name : null}
               layers={layers}
-              minConf={minConf}
-              onMinConf={setMinConf}
             />
           )}
         </div>
