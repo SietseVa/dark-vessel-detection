@@ -95,15 +95,20 @@ Met de functie `tile_pixel_to_latlon` uit `tiff_to_tiles.ipynb` zet je de positi
 Een webdashboard om de dataset te verkennen: een kaart met alle tegels en objecten (AIS, dark, vast),
 een tegelbrowser met de labels over het radarbeeld, en grafieken per scène, lengte en afstand tot de kust.
 
-- `backend/`: FastAPI. Leest `data/xview3_tiles/` en serveert de metadata en tegelbeelden onder `/api`.
-  Tegels hebben in de dataset geen lat/lon; per scène wordt een kubische fit pixel → lat/lon gemaakt op de
-  objecten (fout < 10 m) om elke tegel op de kaart te zetten.
+- `src/dark_vessel_detection/`: het Python-pakket, met de command line tool `dvd`.
+  - `api.py`: FastAPI. Leest `data/xview3_tiles/` en serveert de metadata en tegelbeelden onder `/api`.
+  - `dataset.py`: laadt de dataset. Tegels hebben geen lat/lon; per scène wordt een kubische fit
+    pixel → lat/lon gemaakt op de objecten (fout < 10 m) om elke tegel op de kaart te zetten.
+  - `model.py`, `predictions.py`, `predict.py`: het YOLO-model, de voorspellingscache en de batchrun.
+  - `config.py`: alle paden (aan te passen met env vars of opties van `dvd`).
+  - `cli.py`: de commando's `dvd dashboard`, `dvd api` en `dvd predict`.
 - `frontend/`: React + Vite + TypeScript, shadcn/ui (Tailwind), MapLibre + deck.gl, Recharts.
 
 ### Dashboard starten
 
-**Vereisten:** [uv](https://docs.astral.sh/uv/) en Node.js 20+. De dataset staat in `data/` of
-`data/xview3_tiles/` (gitignored); een eigen pad kan met `DATA_DIR=...`.
+**Vereisten:** [uv](https://docs.astral.sh/uv/). Node.js 20+ is handig maar niet verplicht: zonder Node
+gebruikt `dvd` automatisch `uvx --from nodejs-wheel npm`. De dataset staat in `data/` of
+`data/xview3_tiles/` (gitignored); een eigen pad kan met `--data-dir` (of `DATA_DIR=...`).
 
 1. **Haal de nieuwste versie van `main` op** (vanuit de root van de repo):
 
@@ -114,39 +119,39 @@ een tegelbrowser met de labels over het radarbeeld, en grafieken per scène, len
 
    `data/` en `runs/` staan niet in git en blijven dus gewoon staan.
 
-2. **Installeer de Python-pakketten** (FastAPI, Ultralytics, ...):
+2. **Installeer het project** (FastAPI, Ultralytics, ... en het commando `dvd`):
 
    ```bash
    uv sync
    ```
 
-3. **Installeer Node.js** (eenmalig, voor de frontend):
+3. **Start het dashboard:**
 
    ```bash
-   brew install node
+   uv run dvd dashboard
    ```
 
-   Liever niets installeren? Zet dan `uvx --from nodejs-wheel` vóór elk `npm`-commando, bijvoorbeeld
-   `uvx --from nodejs-wheel npm install`.
+   Dit start de API (poort 8000) en de frontend (poort 5180) samen. De eerste keer draait het ook
+   `npm install`. Stoppen doe je met Ctrl+C.
 
-4. **Start de app in twee terminals:**
+4. Open http://localhost:5180 (of start met `--open`).
 
-   ```bash
-   # terminal 1: de API
-   uv run uvicorn backend.main:app --reload --port 8000
+Handige opties (zie `uv run dvd --help` en `uv run dvd dashboard --help`):
 
-   # terminal 2: de frontend
-   cd frontend && npm install && npm run dev
-   ```
-
-5. Open http://localhost:5180. De frontend stuurt `/api` door naar poort 8000.
+| Commando | Wat |
+|---|---|
+| `uv run dvd dashboard --port 8001 --frontend-port 5181` | andere poorten |
+| `uv run dvd dashboard --weights runs/x/weights/best.pt` | een specifiek model |
+| `uv run dvd dashboard --data-dir pad/naar/xview3_tiles` | een andere dataset |
+| `uv run dvd api --reload` | alleen de API |
+| `uv run dvd predict --split val` | het model over de dataset draaien (zie hieronder) |
 
 Krijg je een foutmelding dat poort 8000 of 5180 al in gebruik is, dan draait de app nog ergens anders.
-Stop die eerst.
+Stop die eerst, of kies andere poorten.
 
 ### YOLO-model in het dashboard
 
-De API laadt automatisch de nieuwste `runs/**/weights/best.pt` (of kies er zelf een met `MODEL_PATH=...`).
+De API laadt automatisch de nieuwste `runs/**/weights/best.pt` (of kies er zelf een met `--weights` of `MODEL_PATH=...`).
 Zonder gewichten werkt het dashboard gewoon, alleen zonder modelresultaten.
 
 - In de tegelviewer staan de detecties van het model gestippeld over het radarbeeld (wit = komt overeen
@@ -155,7 +160,7 @@ Zonder gewichten werkt het dashboard gewoon, alleen zonder modelresultaten.
 - Draai het model één keer over de hele dataset om ook de kaart en de scores in de zijbalk te vullen:
 
   ```bash
-  uv run python -m backend.predict            # of --split val, --weights pad/naar/best.pt
+  uv run dvd predict            # of --split val, --weights pad/naar/best.pt
   ```
 
   De resultaten komen in `data/cache/predictions/<run>.json`. Herstart daarna de API.
@@ -169,5 +174,5 @@ Zonder gewichten werkt het dashboard gewoon, alleen zonder modelresultaten.
   schuifregelaar pas je hem aan.
 
 **Modelgewichten staan niet in git.** Zet een getraind model in `runs/<naam>/weights/best.pt` (bijvoorbeeld
-via de gedeelde map van het team) en draai daarna `uv run python -m backend.predict`. Dat is alleen nodig
+via de gedeelde map van het team) en draai daarna `uv run dvd predict`. Dat is alleen nodig
 als je een nieuw model toevoegt: de resultaten worden bewaard in `data/cache/predictions/`.

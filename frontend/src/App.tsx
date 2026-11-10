@@ -266,7 +266,7 @@ export default function App() {
         <p className="text-sm text-muted-foreground">
           Is the backend running?{' '}
           <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-            uv run uvicorn backend.main:app --reload --port 8000
+            uv run dvd dashboard
           </code>
         </p>
       </div>
@@ -386,7 +386,7 @@ export default function App() {
                   ) : (
                     <p className="text-xs text-muted-foreground">
                       To score the whole dataset, run{' '}
-                      <code className="rounded bg-muted px-1 py-0.5 font-mono">uv run python -m backend.predict</code>{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono">uv run dvd predict</code>{' '}
                       and reload.
                     </p>
                   )}

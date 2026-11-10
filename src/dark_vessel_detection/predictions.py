@@ -1,6 +1,6 @@
 """Model detections per tile, cached on disk as data/cache/predictions/<run>.json.
 
-The batch script (python -m backend.predict) fills the cache for whole splits. The API also predicts
+The batch command (dvd predict) fills the cache for whole splits. The API also predicts
 a single tile on demand when it is opened in the viewer, and adds it to the same cache.
 """
 

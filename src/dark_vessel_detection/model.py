@@ -21,14 +21,6 @@ MATCH_RADIUS_PX = 20.0
 CLASSES = ("vessel", "non_vessel")
 
 
-def find_weights(runs_dir: Path) -> Path | None:
-    """MODEL_PATH if set, otherwise the most recently written best.pt (or last.pt) under runs/."""
-    if env := os.environ.get("MODEL_PATH"):
-        return Path(env)
-    candidates = list(runs_dir.glob("**/weights/best.pt")) or list(runs_dir.glob("**/weights/last.pt"))
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
-
-
 def run_name(weights: Path) -> str:
     """runs/detect/yolo26s-vessels-5/weights/best.pt -> 'yolo26s-vessels-5'."""
     return weights.parent.parent.name if weights.parent.name == "weights" else weights.stem
