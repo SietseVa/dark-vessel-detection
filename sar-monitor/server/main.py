@@ -22,9 +22,35 @@ from pipeline.config import MONITOR_DB, SCENES_DIR
 from pipeline.infrastructure import OUT as INFRASTRUCTURE
 
 from .nearby import nearest
+from pipeline.yolo_tiles import OUT as YOLO_TILES
 
 app = FastAPI(title="Dark Vessel Monitor API")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.get("/api/yolo-tiles")
+def yolo_results():
+    path = YOLO_TILES / "results.json"
+    if not path.exists():
+        raise HTTPException(404, "No tile inference yet. Run python -m pipeline.yolo_tiles first.")
+    return FileResponse(path, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/yolo-tiles/overview.jpg")
+def yolo_overview():
+    path = YOLO_TILES / "overview.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No tile overview yet")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/api/yolo-tiles/images/{tile_id}.png")
+def yolo_image(tile_id: str):
+    folder = (YOLO_TILES / "tiles").resolve()
+    path = (folder / (tile_id + ".png")).resolve()
+    if path.parent != folder or not path.is_file():
+        raise HTTPException(404, "Unknown tile")
+    return FileResponse(path, media_type="image/png")
 
 
 @contextmanager

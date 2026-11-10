@@ -39,6 +39,48 @@ cd web && npm install && npm run dev
 
 ## How it works
 
+### Imported tiles and YOLO
+
+The **YOLO tiles** page at `http://localhost:5200/#yolo-tiles` displays an imported
+scene as a selectable mosaic, individual full-resolution RGB tiles, YOLO boxes,
+and archived AIS positions at the acquisition time. The original SAR monitor
+remains available in the other navigation tab.
+
+From `sar-monitor/`, import and run inference with:
+
+```bash
+uv sync
+uv run python -m pipeline.yolo_tiles \
+  --scene /path/to/scene.json \
+  --tiles /path/to/tiles \
+  --weights /path/to/yolo26m-vessels-FINAL/weights/best.pt \
+  --region dk --overlap 64 --confidence 0.10
+```
+
+The default device is CPU; `--device mps` can use an Apple GPU. Input tiles are
+copied into `data/yolo-tiles/tiles/`. `results.json` records detections, AIS,
+scene geometry, model SHA-256 and inference settings; `overview.jpg` is the mosaic.
+These files are local ignored data. The API serves the latest completed run.
+The original monitor database is not modified.
+
+Tile filenames end in `_row_col.png`. Their offsets are reconstructed from the
+tile size and overlap, then checked against identical overlapping image pixels.
+Coordinates use the scene's CRS, upper-left origin and pixel size. Edge padding
+is excluded and overlapping detections undergo scene-wide non-maximum suppression.
+
+AIS uses the existing regional archive, interpolating or extrapolating at
+`acquired_utc` with a maximum nearest-message age of 600 seconds. Associations are
+one-to-one proximity matches within 300 m (`--match-m`), computed at the inference
+confidence floor. The display slider filters these fixed results. No radar
+displacement correction or land masking is applied; nearby AIS is not a confirmed
+identity, and an unmatched box is not proof of a dark vessel. Model class labels
+are displayed as predictions, independently of actual AIS availability.
+
+For the supplied Aarhus Bay scene (7 November 2026 05:32:04 UTC), the first run
+processed 90 tiles: 35 raw boxes, 28 after deduplication, 37 AIS ships and 3 proximity
+associations at 10% confidence. At the default 25% display threshold, 9 boxes remain
+and none have an AIS association. The highest confidence was 37.6%.
+
 | File | What |
 |---|---|
 | `pipeline/scenes.py` | Searches and downloads scenes, and the earlier images of the same orbit |

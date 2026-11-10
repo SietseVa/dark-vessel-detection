@@ -138,7 +138,7 @@ export default function App() {
     )
 
   return (
-    <div className="grid h-svh grid-cols-1 overflow-hidden md:grid-cols-[420px_1fr]">
+    <div className="grid h-full grid-cols-1 overflow-hidden md:grid-cols-[420px_1fr]">
       <aside className="hidden min-h-0 border-r bg-sidebar md:block">
         <ScrollArea className="h-full">
           <div className="flex flex-col gap-6 p-5">
