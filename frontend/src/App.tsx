@@ -16,6 +16,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { MapView } from '@/components/MapView'
 import { TileGrid } from '@/components/TileGrid'
 import { TileViewer } from '@/components/TileViewer'
+import { LiveAnalysis } from '@/components/LiveAnalysis'
 import { SceneBars, StackedHistogram, type BinDatum, type SceneDatum } from '@/components/Charts'
 import { Swatch } from '@/components/Swatch'
 
@@ -101,7 +102,7 @@ export default function App() {
   const [data, setData] = useState<Dataset | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
-  const [view, setView] = useState<'map' | 'tiles'>('map')
+  const [view, setView] = useState<'map' | 'tiles' | 'live'>('map')
   const [selectedTile, setSelectedTile] = useState<string | null>(null)
   const [model, setModel] = useState<ModelInfo | null>(null)
   const [predictions, setPredictions] = useState<Predictions | null>(null)
@@ -280,8 +281,8 @@ export default function App() {
   const isDefault = JSON.stringify(filters) === JSON.stringify(DEFAULT_FILTERS)
 
   return (
-    <div className="grid h-svh grid-cols-1 overflow-hidden md:grid-cols-[380px_1fr]">
-      <aside className="hidden min-h-0 border-r bg-sidebar md:block">
+    <div className={`grid h-svh grid-cols-1 overflow-hidden ${view === 'live' ? '' : 'md:grid-cols-[380px_1fr]'}`}>
+      <aside className={view === 'live' ? 'hidden' : 'hidden min-h-0 border-r bg-sidebar md:block'}>
         <ScrollArea className="h-full">
           <div className="flex flex-col gap-6 p-5">
             <header>
@@ -511,13 +512,14 @@ export default function App() {
 
       <main className="flex min-h-0 min-w-0 flex-col">
         <div className="flex items-center gap-4 border-b px-4 py-2">
-          <Tabs value={view} onValueChange={(v) => setView(v as 'map' | 'tiles')}>
+          <Tabs value={view} onValueChange={(v) => setView(v as 'map' | 'tiles' | 'live')}>
             <TabsList>
               <TabsTrigger value="map">Map</TabsTrigger>
               <TabsTrigger value="tiles">Tiles</TabsTrigger>
+              <TabsTrigger value="live">Live analysis</TabsTrigger>
             </TabsList>
           </Tabs>
-          {model?.available && (
+          {view !== 'live' && model?.available && (
             <ToggleGroup
               type="single"
               variant="outline"
@@ -532,13 +534,13 @@ export default function App() {
               <ToggleGroupItem value="both" title="Labels, marked found or missed by the model">Both</ToggleGroupItem>
             </ToggleGroup>
           )}
-          <span className="truncate text-sm text-muted-foreground">
+          {view !== 'live' && <span className="truncate text-sm text-muted-foreground">
             {modelOnly
               ? `${fmt.format(shownDetections.length)} detections`
               : `${fmt.format(objects.length)} objects`}{' '}
             · {fmt.format(tiles.length)} tiles
             {activeScene ? ` · ${sceneLabel(activeScene)}` : ''}
-          </span>
+          </span>}
           {view === 'map' && (
             <span className="ml-auto hidden shrink-0 items-center gap-3 text-xs text-muted-foreground lg:flex">
               <span className="flex items-center gap-1.5">
@@ -550,7 +552,13 @@ export default function App() {
             </span>
           )}
         </div>
-        <div className="relative min-h-0 flex-1">
+        {view === 'live' ? (
+          <LiveAnalysis
+            modelAvailable={Boolean(model?.available)}
+            modelName={model?.available ? model.name : undefined}
+          />
+        ) : (
+          <div className="relative min-h-0 flex-1">
           {view === 'map' ? (
             <MapView
               scenes={data.scenes}
@@ -587,7 +595,8 @@ export default function App() {
               layers={layers}
             />
           )}
-        </div>
+          </div>
+        )}
       </main>
     </div>
   )

@@ -151,7 +151,8 @@ Stop die eerst, of kies andere poorten.
 
 ### YOLO-model in het dashboard
 
-De API laadt automatisch de nieuwste `runs/**/weights/best.pt` (of kies er zelf een met `--weights` of `MODEL_PATH=...`).
+De API gebruikt standaard `runs/detect/yolo26m-vessels-FINAL/weights/best.pt` als dat bestand bestaat; anders laadt
+de API de nieuwste `runs/**/weights/best.pt` (of kies er zelf een met `--weights` of `MODEL_PATH=...`).
 Zonder gewichten werkt het dashboard gewoon, alleen zonder modelresultaten.
 
 - In de tegelviewer staan de detecties van het model gestippeld over het radarbeeld (wit = komt overeen
@@ -176,3 +177,18 @@ Zonder gewichten werkt het dashboard gewoon, alleen zonder modelresultaten.
 **Modelgewichten staan niet in git.** Zet een getraind model in `runs/<naam>/weights/best.pt` (bijvoorbeeld
 via de gedeelde map van het team) en draai daarna `uv run dvd predict`. Dat is alleen nodig
 als je een nieuw model toevoegt: de resultaten worden bewaard in `data/cache/predictions/`.
+
+### Live Sentinel-1-analyse
+
+Open de tab **Live analysis** om het model op een nieuw Sentinel-1-beeld toe te passen. De beeldmap moet eerst
+zijn verwerkt met `notebooks/tiff_to_tiles.ipynb`, zodat elke scène `scene.json`, `tiles.csv`, `tiles.json` en
+PNG-tegels bevat. Standaard zoekt het dashboard onder `data/sentinel1/` en leest AIS-posities uit
+`data/monitor.sqlite`; pas deze paden zo nodig aan met `SENTINEL_DATA_DIR` en `AIS_DB_PATH`.
+
+Selecteer een scène en kies **Run detection**. Het model verwerkt de tegels; alleen scheepsdetecties met een
+betrouwbaarheid van minimaal 0,15 worden getoond. Detecties worden gekoppeld aan AIS-posities van dezelfde
+satellietpassage op basis van de SAR-gecorrigeerde AIS-positie en een afstand van maximaal 200 meter. De tabel
+toont onder meer MMSI, naam, scheepstype, snelheid en afstand. Een niet-gematchte detectie heet **Potential dark**,
+geen bevestigde dark vessel. Als de database geen AIS-dekking voor de passage heeft, blijft de status **AIS
+coverage unknown**. Resultaten worden gecachet in `data/cache/live/` en opnieuw berekend als de tegels,
+modelgewichten of AIS-database veranderen.

@@ -33,6 +33,8 @@ class Settings:
     thumb_dir: Path
     predictions_dir: Path
     runs_dir: Path
+    sentinel_dir: Path
+    ais_db_path: Path
     model_path: Path | None = None
 
     @classmethod
@@ -45,6 +47,8 @@ class Settings:
             thumb_dir=_env_path("THUMB_DIR", cache_dir / "thumbs"),
             predictions_dir=_env_path("PREDICTIONS_DIR", cache_dir / "predictions"),
             runs_dir=_env_path("RUNS_DIR", REPO / "runs"),
+            sentinel_dir=_env_path("SENTINEL_DATA_DIR", REPO / "data" / "sentinel1"),
+            ais_db_path=_env_path("AIS_DB_PATH", REPO / "data" / "monitor.sqlite"),
             model_path=Path(model_path) if model_path else None,
         )
 
@@ -53,9 +57,12 @@ class Settings:
         return (self.data_dir / "meta" / "tiles.csv").exists()
 
     def weights(self) -> Path | None:
-        """MODEL_PATH if set, otherwise the most recently written best.pt (or last.pt) under runs/."""
+        """MODEL_PATH, the configured final model, or the newest weights under runs/."""
         if self.model_path:
             return self.model_path
+        preferred = self.runs_dir / "detect" / "yolo26m-vessels-FINAL" / "weights" / "best.pt"
+        if preferred.exists():
+            return preferred
         runs = self.runs_dir
         candidates = list(runs.glob("**/weights/best.pt")) or list(runs.glob("**/weights/last.pt"))
         return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None

@@ -14,6 +14,7 @@ from PIL import Image
 
 from .config import Settings
 from .dataset import Dataset
+from .live import LiveAnalysisStore
 from .model import Detector
 from .predictions import PredictionStore
 
@@ -27,7 +28,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # The model is optional: without weights the dashboard still shows the dataset.
     weights = settings.weights()
-    store = PredictionStore(ds, Detector(weights), settings.predictions_dir) if weights and weights.exists() else None
+    detector = Detector(weights) if weights and weights.exists() else None
+    store = PredictionStore(ds, detector, settings.predictions_dir) if detector else None
+    live = LiveAnalysisStore(settings.sentinel_dir, settings.ais_db_path, settings.cache_dir, detector)
 
     app = FastAPI(title="Dark Vessel Detection API")
     app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -42,6 +45,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if store is None:
             raise HTTPException(404, f"no model weights found under {settings.runs_dir}; set MODEL_PATH")
         return store
+
+    def require_live_data() -> None:
+        if not settings.sentinel_dir.is_dir():
+            raise HTTPException(503, f"Sentinel-1 data directory not found at {settings.sentinel_dir}")
+        if not settings.ais_db_path.is_file():
+            raise HTTPException(503, f"AIS database not found at {settings.ais_db_path}")
 
     @app.get("/api/summary")
     def summary():
@@ -105,5 +114,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Detections for one tile; runs the model if the tile is not cached yet."""
         tile_or_404(tile_id)
         return store_or_404().for_tile(tile_id)
+
+    @app.get("/api/live/scenes")
+    def live_scenes():
+        require_live_data()
+        return live.scenes()
+
+    @app.post("/api/live/scenes/{scene_key}/analyze")
+    def analyze_live_scene(scene_key: str):
+        require_live_data()
+        if live.detector is None:
+            raise HTTPException(404, f"no model weights found under {settings.runs_dir}; set MODEL_PATH")
+        try:
+            return live.analyze(scene_key)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+
+    @app.get("/api/live/scenes/{scene_key}/tiles")
+    def live_scene_tiles(scene_key: str):
+        require_live_data()
+        try:
+            return live.tiles(scene_key)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+
+    @app.get("/api/live/scenes/{scene_key}/tiles/{tile_id}/image")
+    def live_tile_image(scene_key: str, tile_id: str):
+        require_live_data()
+        try:
+            image_path = live.tile_image(scene_key, tile_id)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+        return FileResponse(image_path, media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     return app

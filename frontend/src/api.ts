@@ -138,3 +138,85 @@ export const loadTileDetections = (id: string) =>
   get<Detection[]>(`/api/tiles/${encodeURIComponent(id)}/detections`)
 
 export type DetectionCounts = Record<Detection['class'], number>
+
+// ---- Newly downloaded Sentinel-1 scenes -------------------------------------------------------
+
+export interface LiveScene {
+  key: string
+  scene_id: string | null
+  area: string
+  acquired_utc: string
+  tile_count: number
+  ais_count: number
+  ais_covered: boolean
+}
+
+export interface LiveTile {
+  tile_id: string
+  tile_row: number
+  tile_col: number
+  corners: [number, number][]
+  center: [number, number]
+}
+
+export interface LiveAIS {
+  mmsi: number
+  name: string | null
+  ship_type: string | null
+  lat: number
+  lon: number
+  sar_lat: number
+  sar_lon: number
+  sog_kn: number | null
+  cog_deg: number | null
+  heading_deg: number | null
+  age_s: number
+  method: string
+  length_m: number | null
+  width_m: number | null
+}
+
+export interface LiveDetection {
+  id: string
+  tile_id: string
+  conf: number
+  x_px: number
+  y_px: number
+  w_px: number
+  h_px: number
+  lat: number
+  lon: number
+  ais_status: 'matched' | 'potential_dark' | 'unknown'
+  ais_distance_m: number | null
+  ais: LiveAIS | null
+}
+
+export interface LiveAnalysisResult {
+  scene_id: string | null
+  scene_key: string
+  area: string
+  acquired_utc: string
+  model: string | null
+  min_conf: number
+  match_radius_m: number
+  ais_covered: boolean
+  ais_count: number
+  detections: LiveDetection[]
+}
+
+async function post<T>(path: string): Promise<T> {
+  const r = await fetch(path, { method: 'POST' })
+  if (!r.ok) {
+    const message = await r.text()
+    throw new Error(`${path}: ${r.status} ${message || r.statusText}`)
+  }
+  return r.json()
+}
+
+export const loadLiveScenes = () => get<LiveScene[]>('/api/live/scenes')
+export const loadLiveTiles = (key: string) =>
+  get<LiveTile[]>(`/api/live/scenes/${encodeURIComponent(key)}/tiles`)
+export const analyzeLiveScene = (key: string) =>
+  post<LiveAnalysisResult>(`/api/live/scenes/${encodeURIComponent(key)}/analyze`)
+export const liveTileImageUrl = (sceneKey: string, tileId: string) =>
+  `/api/live/scenes/${encodeURIComponent(sceneKey)}/tiles/${encodeURIComponent(tileId)}/image`
