@@ -1,4 +1,4 @@
-path: /Users/bureauinnovatie2/Documents/dark-vessels/dark-vessel-detection/data
+path: /Users/vincent/Projects/dark-vessel-detection/data
 train: images/train
 val: images/val
 
