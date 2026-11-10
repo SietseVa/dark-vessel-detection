@@ -22,11 +22,8 @@ OUT = DATA / "infrastructure" / "infrastructure.geojson"
 EMODNET = "https://ows.emodnet-humanactivities.eu/wfs"
 OVERPASS = "https://overpass-api.de/api/interpreter"
 
-# One box around all regions: lon_min, lat_min, lon_max, lat_max
-BBOX = (
-    min(r[0] for r in REGIONS.values()), min(r[1] for r in REGIONS.values()),
-    max(r[2] for r in REGIONS.values()), max(r[3] for r in REGIONS.values()),
-)
+# Only the Danish region for now: lon_min, lat_min, lon_max, lat_max
+BBOX = REGIONS["dk"]
 
 
 def _round(coords):

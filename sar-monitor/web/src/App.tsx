@@ -30,7 +30,7 @@ const LAYER_ROWS: { key: keyof Layers; label: string; swatch: React.ReactNode }[
   { key: 'aisMatched', label: 'AIS positions of matched ships', swatch: <Ring color={COLORS.matched} /> },
   { key: 'aisOnly', label: 'AIS ships not detected on radar', swatch: <Ring color={COLORS.aisOnly} /> },
   { key: 'radar', label: 'Radar image', swatch: <span className="size-2.5 shrink-0 rounded-sm bg-neutral-500" /> },
-  { key: 'infrastructure', label: 'Offshore infrastructure', swatch: <span className="size-2.5 shrink-0" /> },
+  { key: 'infrastructure', label: 'Offshore infrastructure', swatch: <span aria-hidden className="size-2.5 shrink-0 rounded-[3px] border-2" style={{ borderColor: INFRA.wind_farm.color }} /> },
 ]
 
 function Kpi({ label, value, sub, swatch }: { label: string; value: string; sub?: string; swatch?: React.ReactNode }) {
@@ -67,6 +67,8 @@ export default function App() {
     infrastructure: true,
   })
   const [infrastructure, setInfrastructure] = useState<Infrastructure | null>(null)
+  // Only show legend entries for the kinds that are actually on the map
+  const infraKinds = useMemo(() => new Set(infrastructure?.features.map((f) => f.properties.kind)), [infrastructure])
   const [selection, setSelection] = useState<Selection | null>(null)
 
   useEffect(() => {
@@ -211,13 +213,15 @@ export default function App() {
                 ))}
               </div>
               {layers.infrastructure && (
-                <div className="flex flex-wrap gap-x-4 gap-y-1.5 pl-6.5 text-xs text-muted-foreground">
-                  {Object.entries(INFRA).map(([kind, v]) => (
-                    <span key={kind} className="flex items-center gap-1.5">
-                      <span aria-hidden className="inline-block h-0.5 w-3.5" style={{ background: v.color }} />
-                      {v.label}
-                    </span>
-                  ))}
+                <div className="ml-6.5 grid grid-cols-2 gap-x-4 gap-y-1.5 border-l pl-3 text-xs text-muted-foreground">
+                  {Object.entries(INFRA)
+                    .filter(([kind]) => !infrastructure || infraKinds.has(kind as never))
+                    .map(([kind, v]) => (
+                      <span key={kind} className="flex items-center gap-2">
+                        <span aria-hidden className="inline-block h-0.5 w-4 shrink-0 rounded-full" style={{ background: v.color }} />
+                        {v.label}
+                      </span>
+                    ))}
                 </div>
               )}
             </div>
