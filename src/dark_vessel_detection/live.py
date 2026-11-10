@@ -27,6 +27,7 @@ class Scene:
     key: str
     root: Path
     scene_id: str | None
+    scene_ids: tuple[str, ...]
     area: str
     acquired_utc: str
     tile_count: int
@@ -99,6 +100,38 @@ class LiveAnalysisStore:
             raise FileNotFoundError(f"AIS database not found at {self.ais_db_path}")
         return sqlite3.connect(f"{self.ais_db_path.resolve().as_uri()}?mode=ro", uri=True)
 
+    def _scene_from_metadata(self, root: Path, metadata: dict) -> Scene:
+        area = metadata.get("area", root.parent.name)
+        scene_ids = tuple(
+            dict.fromkeys(
+                match.group(1)
+                for source in metadata.get("scenes", [])
+                if (match := SCENE_ID.match(source.get("id", "")))
+            )
+        )
+        scene_id = scene_ids[0] if scene_ids else None
+        with (root / "tiles.csv").open() as f:
+            tile_count = sum(1 for _ in csv.DictReader(f))
+        ais_rows = self._ais_rows(scene_ids)
+        with closing(self._connect_ais()) as db:
+            placeholders = ",".join("?" for _ in scene_ids)
+            status_rows = (
+                db.execute(f"SELECT status FROM scenes WHERE id IN ({placeholders})", scene_ids).fetchall()
+                if scene_ids
+                else []
+            )
+        return Scene(
+            key=f"{area}_{root.name}",
+            root=root,
+            scene_id=scene_id,
+            scene_ids=scene_ids,
+            area=area,
+            acquired_utc=metadata.get("acquired_utc", ""),
+            tile_count=tile_count,
+            ais_count=len(ais_rows),
+            ais_covered=bool(ais_rows) or any(row[0] == "detected" for row in status_rows),
+        )
+
     def _scene(self, key: str) -> Scene:
         if not self.sentinel_dir.is_dir():
             raise FileNotFoundError(f"Sentinel-1 data directory not found at {self.sentinel_dir}")
@@ -110,31 +143,7 @@ class LiveAnalysisStore:
             area = metadata.get("area", root.parent.name)
             if f"{area}_{root.name}" != key:
                 continue
-            source_ids = [s.get("id", "") for s in metadata.get("scenes", [])]
-            scene_id = next((m.group(1) for value in source_ids if (m := SCENE_ID.match(value))), None)
-            tile_rows = list(csv.DictReader((root / "tiles.csv").open()))
-            with closing(self._connect_ais()) as db:
-                status_row = (
-                    db.execute("SELECT status FROM scenes WHERE id = ?", (scene_id,)).fetchone()
-                    if scene_id
-                    else None
-                )
-                ais_count = (
-                    db.execute("SELECT count(*) FROM ais_at_pass WHERE scene_id = ?", (scene_id,)).fetchone()[0]
-                    if scene_id
-                    else 0
-                )
-            status = status_row[0] if status_row else None
-            return Scene(
-                key=key,
-                root=root,
-                scene_id=scene_id,
-                area=area,
-                acquired_utc=metadata.get("acquired_utc", ""),
-                tile_count=len(tile_rows),
-                ais_count=ais_count,
-                ais_covered=bool(ais_count) or status == "detected",
-            )
+            return self._scene_from_metadata(root, metadata)
         raise FileNotFoundError(f"Sentinel-1 scene {key!r} was not found under {self.sentinel_dir}")
 
     def scenes(self) -> list[dict]:
@@ -146,8 +155,7 @@ class LiveAnalysisStore:
             if not (root / "tiles.csv").is_file():
                 continue
             metadata = json.loads(metadata_path.read_text())
-            area = metadata.get("area", root.parent.name)
-            scene = self._scene(f"{area}_{root.name}")
+            scene = self._scene_from_metadata(root, metadata)
             out.append(
                 {
                     "key": scene.key,
@@ -160,6 +168,87 @@ class LiveAnalysisStore:
                 }
             )
         return out
+
+    def analyze_all(self) -> dict:
+        """Run the detector once over every tile from every tiled Sentinel-1 scene."""
+        if self.detector is None:
+            raise RuntimeError("No model weights are available; set MODEL_PATH or add the configured model weights.")
+        if not self.sentinel_dir.is_dir():
+            raise FileNotFoundError(f"Sentinel-1 data directory not found at {self.sentinel_dir}")
+
+        scenes = []
+        for metadata_path in sorted(self.sentinel_dir.rglob("scene.json")):
+            root = metadata_path.parent
+            if (root / "tiles.csv").is_file():
+                metadata = json.loads(metadata_path.read_text())
+                scenes.append((self._scene_from_metadata(root, metadata), metadata))
+        if not scenes:
+            raise FileNotFoundError(f"No tiled Sentinel-1 scenes found under {self.sentinel_dir}")
+
+        scene_inputs: list[tuple[Scene, dict, list[tuple[dict[str, str], Path]], list[dict], int]] = []
+        all_paths: list[Path] = []
+        for scene, metadata in scenes:
+            with (scene.root / "tiles.csv").open() as f:
+                tiles = list(csv.DictReader(f))
+            if not tiles:
+                raise ValueError(f"Scene {scene.key!r} contains no tiles")
+            rows_by_path: list[tuple[dict[str, str], Path]] = []
+            for tile in tiles:
+                path = (scene.root / tile["file"]).resolve()
+                if not path.is_relative_to(scene.root.resolve()) or not path.is_file():
+                    raise FileNotFoundError(
+                        f"Tile image is missing or outside scene {scene.key!r}: {tile['file']}"
+                    )
+                rows_by_path.append((tile, path))
+            tile_size = int(json.loads((scene.root / "tiles.json").read_text()).get("tile_size", 640))
+            ais_rows = self._ais_rows(scene.scene_ids)
+            scene_inputs.append((scene, metadata, rows_by_path, ais_rows, tile_size))
+            all_paths.extend(path for _, path in rows_by_path)
+
+        with self._lock:
+            predictions = self.detector.predict(all_paths, batch=16)
+            if len(predictions) != len(all_paths):
+                raise RuntimeError("The model returned a different number of tile results than it received.")
+
+            results = []
+            offset = 0
+            for scene, metadata, rows_by_path, ais_rows, tile_size in scene_inputs:
+                end = offset + len(rows_by_path)
+                analysis = self._build_analysis(
+                    scene, metadata, rows_by_path, predictions[offset:end], ais_rows, tile_size
+                )
+
+                input_mtime = max(
+                    [path.stat().st_mtime for _, path in rows_by_path]
+                    + [
+                        (scene.root / "tiles.csv").stat().st_mtime,
+                        (scene.root / "scene.json").stat().st_mtime,
+                    ]
+                )
+                cache_path = self.cache_dir / "live" / f"{scene.key}-{self.detector.name}.json"
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = cache_path.with_suffix(".tmp")
+                tmp.write_text(
+                    json.dumps(
+                        {
+                            "input_mtime": input_mtime,
+                            "weights_mtime": self.detector.weights.stat().st_mtime,
+                            "ais_mtime": self.ais_db_path.stat().st_mtime,
+                            "ais_scene_ids": list(scene.scene_ids),
+                            "analysis": analysis,
+                        },
+                        separators=(",", ":"),
+                    )
+                )
+                tmp.replace(cache_path)
+                results.append(analysis)
+                offset = end
+
+        return {
+            "scene_count": len(results),
+            "tile_count": len(all_paths),
+            "scenes": results,
+        }
 
     def tile_image(self, scene_key: str, tile_id: str) -> Path:
         scene = self._scene(scene_key)
@@ -209,6 +298,7 @@ class LiveAnalysisStore:
                 )
                 tiles.append(
                     {
+                        "scene_key": scene.key,
                         "tile_id": tile["tile_id"],
                         "tile_row": int(tile.get("tile_row", 0)),
                         "tile_col": int(tile.get("tile_col", 0)),
@@ -244,6 +334,7 @@ class LiveAnalysisStore:
         )
         weights_mtime = self.detector.weights.stat().st_mtime
         ais_mtime = self.ais_db_path.stat().st_mtime
+        ais_rows = self._ais_rows(scene.scene_ids)
         with self._lock:
             if cache_path.is_file():
                 cached = json.loads(cache_path.read_text())
@@ -251,10 +342,10 @@ class LiveAnalysisStore:
                     cached.get("input_mtime") == input_mtime
                     and cached.get("weights_mtime") == weights_mtime
                     and cached.get("ais_mtime") == ais_mtime
+                    and cached.get("ais_scene_ids") == list(scene.scene_ids)
                 ):
                     return cached["analysis"]
 
-            ais_rows = self._ais_rows(scene.scene_id)
             predictions = self.detector.predict([path for _, path in rows_by_path], batch=16)
             if len(predictions) != len(rows_by_path):
                 raise RuntimeError("The model returned a different number of tile results than it received.")
@@ -267,6 +358,7 @@ class LiveAnalysisStore:
                         "input_mtime": input_mtime,
                         "weights_mtime": weights_mtime,
                         "ais_mtime": ais_mtime,
+                        "ais_scene_ids": list(scene.scene_ids),
                         "analysis": analysis,
                     },
                     separators=(",", ":"),
@@ -275,18 +367,25 @@ class LiveAnalysisStore:
             tmp.replace(cache_path)
             return analysis
 
-    def _ais_rows(self, scene_id: str | None) -> list[dict]:
-        if not scene_id:
+    def _ais_rows(self, scene_ids: tuple[str, ...]) -> list[dict]:
+        if not scene_ids:
             return []
+        placeholders = ",".join("?" for _ in scene_ids)
         with closing(self._connect_ais()) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute(
-                """SELECT mmsi, lat, lon, sar_lat, sar_lon, sog_kn, cog_deg, heading_deg,
-                          age_s, method, name, ship_type, length_m, width_m
-                   FROM ais_at_pass WHERE scene_id = ?""",
-                (scene_id,),
+                f"""SELECT scene_id, mmsi, lat, lon, sar_lat, sar_lon, sog_kn, cog_deg, heading_deg,
+                           age_s, method, name, ship_type, length_m, width_m
+                    FROM ais_at_pass WHERE scene_id IN ({placeholders})""",
+                scene_ids,
             ).fetchall()
-        return [dict(row) for row in rows]
+        by_mmsi: dict[int, dict] = {}
+        for row in rows:
+            item = dict(row)
+            previous = by_mmsi.get(item["mmsi"])
+            if previous is None or item["age_s"] < previous["age_s"]:
+                by_mmsi[item["mmsi"]] = item
+        return list(by_mmsi.values())
 
     def _build_analysis(
         self,
@@ -324,6 +423,7 @@ class LiveAnalysisStore:
                 detections.append(
                     {
                         "id": f"{tile['tile_id']}:{index}",
+                        "scene_key": scene.key,
                         "tile_id": tile["tile_id"],
                         "conf": prediction["conf"],
                         "x_px": x_px,

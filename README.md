@@ -185,10 +185,18 @@ zijn verwerkt met `notebooks/tiff_to_tiles.ipynb`, zodat elke scène `scene.json
 PNG-tegels bevat. Standaard zoekt het dashboard onder `data/sentinel1/` en leest AIS-posities uit
 `data/monitor.sqlite`; pas deze paden zo nodig aan met `SENTINEL_DATA_DIR` en `AIS_DB_PATH`.
 
-Selecteer een scène en kies **Run detection**. Het model verwerkt de tegels; alleen scheepsdetecties met een
-betrouwbaarheid van minimaal 0,15 worden getoond. Detecties worden gekoppeld aan AIS-posities van dezelfde
-satellietpassage op basis van de SAR-gecorrigeerde AIS-positie en een afstand van maximaal 200 meter. De tabel
-toont onder meer MMSI, naam, scheepstype, snelheid en afstand. Een niet-gematchte detectie heet **Potential dark**,
-geen bevestigde dark vessel. Als de database geen AIS-dekking voor de passage heeft, blijft de status **AIS
-coverage unknown**. Resultaten worden gecachet in `data/cache/live/` en opnieuw berekend als de tegels,
-modelgewichten of AIS-database veranderen.
+Selecteer een scène en kies **Run detection** om die scène te verwerken, of **Run all scenes** om alle PNG-tegels
+van alle getegelde scènes in één modelrun te verwerken. Kies **All areas / scenes** in de scènelijst om de tegels
+van alle gebieden tegelijk op de kaart te tonen. Resultaten blijven per scène beschikbaar wanneer je daarna een
+andere scène of alle gebieden selecteert.
+
+Alle product-ID's in `scene.json` worden gekoppeld aan `scenes.id` en `ais_at_pass.scene_id` in
+`data/monitor.sqlite`. Een scène die uit meerdere Sentinel-producten is opgebouwd gebruikt dus AIS uit elk van die
+producten; dubbele MMSI's worden teruggebracht tot de AIS-positie met de kleinste tijdsafstand tot de passage.
+Daardoor kunnen meerdere gebiedsmappen van dezelfde satellietpassage dezelfde AIS-set gebruiken; een AIS-positie
+wordt alleen aan een detectie gekoppeld als de SAR-gecorrigeerde positie binnen 200 meter ligt. Alleen
+scheepsdetecties met een betrouwbaarheid van minimaal 0,15 worden getoond. De tabel toont onder meer
+MMSI, naam, scheepstype, snelheid en afstand. Een niet-gematchte detectie heet **Potential dark**, geen bevestigde
+dark vessel. Als de database geen AIS-dekking voor de passage heeft, blijft de status **AIS coverage unknown**.
+Resultaten worden gecachet in `data/cache/live/` en opnieuw berekend als de tegels, modelgewichten of AIS-database
+veranderen.

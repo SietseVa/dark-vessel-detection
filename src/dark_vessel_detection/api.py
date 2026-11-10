@@ -120,6 +120,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_live_data()
         return live.scenes()
 
+    @app.post("/api/live/scenes/analyze-all")
+    def analyze_all_live_scenes():
+        require_live_data()
+        if live.detector is None:
+            raise HTTPException(404, f"no model weights found under {settings.runs_dir}; set MODEL_PATH")
+        try:
+            return live.analyze_all()
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+
     @app.post("/api/live/scenes/{scene_key}/analyze")
     def analyze_live_scene(scene_key: str):
         require_live_data()

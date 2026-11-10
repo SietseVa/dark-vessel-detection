@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { analyzeLiveScene, liveTileImageUrl, loadLiveScenes, loadLiveTiles, type LiveAnalysisResult, type LiveDetection, type LiveScene, type LiveTile } from '@/api'
+import { analyzeAllLiveScenes, analyzeLiveScene, liveTileImageUrl, loadLiveScenes, loadLiveTiles, type LiveAnalysisResult, type LiveDetection, type LiveScene, type LiveTile } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,6 +14,7 @@ interface Props {
 }
 
 const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 })
+const ALL_AREAS = '__all_areas__'
 
 function statusLabel(status: LiveDetection['ais_status']): string {
   if (status === 'matched') return 'AIS matched'
@@ -35,10 +36,12 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
   const [scenes, setScenes] = useState<LiveScene[]>([])
   const [sceneKey, setSceneKey] = useState('')
   const [tileSet, setTileSet] = useState<{ sceneKey: string; tiles: LiveTile[] }>({ sceneKey: '', tiles: [] })
-  const [analysis, setAnalysis] = useState<LiveAnalysisResult | null>(null)
+  const [batchAnalyses, setBatchAnalyses] = useState<Record<string, LiveAnalysisResult>>({})
+  const [batchSummary, setBatchSummary] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loadingScenes, setLoadingScenes] = useState(true)
   const [running, setRunning] = useState(false)
+  const [runningAll, setRunningAll] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -58,41 +61,68 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
   useEffect(() => {
     if (!sceneKey) return
     let active = true
-    loadLiveTiles(sceneKey).then(
-      (items) => {
-        if (active) setTileSet({ sceneKey, tiles: items })
-      },
-      (e) => {
-        if (active) setError(String(e))
-      },
+    const loadTiles = sceneKey === ALL_AREAS
+      ? Promise.all(scenes.map((item) => loadLiveTiles(item.key))).then((all) => all.flat())
+      : loadLiveTiles(sceneKey)
+    loadTiles.then(
+      (items) => { if (active) setTileSet({ sceneKey, tiles: items }) },
+      (e) => { if (active) setError(String(e)) },
     )
     return () => {
       active = false
     }
-  }, [sceneKey])
+  }, [sceneKey, scenes])
 
   const tiles = tileSet.sceneKey === sceneKey ? tileSet.tiles : []
   const scene = scenes.find((item) => item.key === sceneKey) ?? null
-  const detections = analysis?.detections ?? []
+  const isAllAreas = sceneKey === ALL_AREAS
+  const analyses = isAllAreas
+    ? scenes.flatMap((item) => batchAnalyses[item.key] ? [batchAnalyses[item.key]] : [])
+    : batchAnalyses[sceneKey] ? [batchAnalyses[sceneKey]] : []
+  const analysis = analyses[0] ?? null
+  const detections = analyses.flatMap((item) => item.detections)
   const selected = detections.find((detection) => detection.id === selectedId) ?? detections[0] ?? null
   const tileDetections = selected ? detections.filter((detection) => detection.tile_id === selected.tile_id) : []
   const matched = detections.filter((detection) => detection.ais_status === 'matched').length
   const potentialDark = detections.filter((detection) => detection.ais_status === 'potential_dark').length
+  const aisUnknown = detections.filter((detection) => detection.ais_status === 'unknown').length
 
   const runAnalysis = async () => {
-    if (!sceneKey) return
+    if (!sceneKey || isAllAreas) return
     setRunning(true)
     setError(null)
-    setAnalysis(null)
+    setBatchSummary(null)
     setSelectedId(null)
     try {
       const result = await analyzeLiveScene(sceneKey)
-      setAnalysis(result)
+      setBatchAnalyses((current) => ({ ...current, [sceneKey]: result }))
       setSelectedId(result.detections[0]?.id ?? null)
     } catch (e) {
       setError(String(e))
     } finally {
       setRunning(false)
+    }
+  }
+
+  const runAllAnalyses = async () => {
+    setRunning(true)
+    setRunningAll(true)
+    setError(null)
+    setBatchSummary(null)
+    try {
+      const result = await analyzeAllLiveScenes()
+      const byKey = Object.fromEntries(result.scenes.map((item) => [item.scene_key, item]))
+      setBatchAnalyses((current) => ({ ...current, ...byKey }))
+      const selectedAnalysis = byKey[sceneKey] ?? result.scenes[0]
+      setSelectedId(selectedAnalysis?.detections[0]?.id ?? null)
+      setBatchSummary(
+        `Completed ${result.scene_count} scenes and ${result.tile_count.toLocaleString()} tiles. Results are ready for each scene.`,
+      )
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setRunning(false)
+      setRunningAll(false)
     }
   }
 
@@ -110,7 +140,6 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
             value={sceneKey}
             onValueChange={(key) => {
               setSceneKey(key)
-              setAnalysis(null)
               setSelectedId(null)
               setError(null)
             }}
@@ -120,6 +149,7 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
               <SelectValue placeholder={loadingScenes ? 'Loading scenes…' : 'Select a Sentinel-1 scene'} />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value={ALL_AREAS}>All areas / scenes</SelectItem>
               {scenes.map((item) => (
                 <SelectItem key={item.key} value={item.key}>
                   {sceneLabel(item)}
@@ -128,12 +158,21 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
             </SelectContent>
           </Select>
         </div>
-        <Button onClick={runAnalysis} disabled={!sceneKey || !modelAvailable || running}>
+        <Button onClick={runAnalysis} disabled={!sceneKey || isAllAreas || !modelAvailable || running}>
           {running ? 'Running model…' : analysis ? 'Run again' : 'Run detection'}
+        </Button>
+        <Button variant="outline" onClick={runAllAnalyses} disabled={loadingScenes || scenes.length === 0 || !modelAvailable || running}>
+          {runningAll ? 'Running all scenes…' : 'Run all scenes'}
         </Button>
       </div>
 
-      {scene && (
+      {batchSummary && <p className="text-sm text-muted-foreground">{batchSummary}</p>}
+      {isAllAreas ? (
+        <p className="text-xs text-muted-foreground">
+          All {scenes.length} scenes · {tiles.length.toLocaleString()} tiles ·{' '}
+          {scenes.filter((item) => item.ais_covered).length} scenes with AIS coverage recorded
+        </p>
+      ) : scene && (
         <p className="text-xs text-muted-foreground">
           {scene.tile_count} tiles · {scene.ais_count} AIS positions in the pass database ·{' '}
           {scene.ais_covered ? 'AIS coverage recorded' : 'AIS coverage unavailable'}
@@ -153,8 +192,8 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
           tiles.json, and its tile PNGs.
         </p>
       )}
-      {analysis && (
-        <div className="grid grid-cols-3 gap-3">
+      {analyses.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <Card size="sm">
             <CardHeader>
               <CardDescription>Vessel detections</CardDescription>
@@ -169,18 +208,25 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
           </Card>
           <Card size="sm">
             <CardHeader>
-              <CardDescription>{analysis.ais_covered ? 'Potential dark' : 'AIS unknown'}</CardDescription>
-              <CardTitle className="text-2xl tabular-nums">
-                {number.format(analysis.ais_covered ? potentialDark : detections.length)}
-              </CardTitle>
+              <CardDescription>Potential dark</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{number.format(potentialDark)}</CardTitle>
+            </CardHeader>
+          </Card>
+          <Card size="sm">
+            <CardHeader>
+              <CardDescription>AIS unknown</CardDescription>
+              <CardTitle className="text-2xl tabular-nums">{number.format(aisUnknown)}</CardTitle>
             </CardHeader>
           </Card>
         </div>
       )}
 
-      {scene && tiles.length > 0 && (
+      {sceneKey && tiles.length > 0 && (
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1.7fr)_minmax(360px,1fr)]">
           <div className="relative min-h-[360px] overflow-hidden rounded-lg border">
+            <div className="absolute left-3 top-3 z-10 rounded-md border bg-background/95 px-2.5 py-1.5 text-xs shadow">
+              Showing all {tiles.length.toLocaleString()} tiles {isAllAreas ? 'across all scenes' : 'for this scene'}
+            </div>
             <LiveMap
               key={sceneKey}
               tiles={tiles}
@@ -200,20 +246,18 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
             <CardHeader>
               <CardTitle>{selected ? 'Selected vessel' : 'Detected vessels'}</CardTitle>
               <CardDescription>
-                {analysis
-                  ? analysis.ais_covered
-                    ? 'Unmatched detections are potential dark vessels, not confirmed violations.'
-                    : 'AIS coverage is unknown, so unmatched detections are not labelled dark.'
-                  : 'Run the model to plot vessel detections on the map.'}
+                {analyses.length
+                  ? 'AIS status is determined separately for each scene; potential dark detections are not confirmed violations.'
+                  : 'Run detection for a scene or all scenes to plot vessel detections on the map.'}
               </CardDescription>
             </CardHeader>
-            {selected && sceneKey && (
+            {selected && (
               <CardContent className="flex flex-col gap-3">
                 <div className="grid grid-cols-[128px_1fr] gap-3">
                   <div className="relative aspect-square overflow-hidden rounded-md border bg-black">
                     <img
                       className="absolute inset-0 size-full object-contain"
-                      src={liveTileImageUrl(sceneKey, selected.tile_id)}
+                      src={liveTileImageUrl(selected.scene_key, selected.tile_id)}
                       alt={`Sentinel-1 tile ${selected.tile_id}`}
                     />
                     <svg className="absolute inset-0 size-full" viewBox="0 0 640 640" preserveAspectRatio="none" aria-hidden>
@@ -278,7 +322,7 @@ export function LiveAnalysis({ modelAvailable, modelName }: Props) {
                         <TableCell>{detection.ais?.ship_type ?? '—'}</TableCell>
                       </TableRow>
                     ))}
-                    {analysis && detections.length === 0 && (
+                    {analyses.length > 0 && detections.length === 0 && (
                       <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">No vessel detections.</TableCell></TableRow>
                     )}
                   </TableBody>

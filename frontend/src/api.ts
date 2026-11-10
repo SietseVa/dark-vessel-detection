@@ -152,6 +152,7 @@ export interface LiveScene {
 }
 
 export interface LiveTile {
+  scene_key: string
   tile_id: string
   tile_row: number
   tile_col: number
@@ -178,6 +179,7 @@ export interface LiveAIS {
 
 export interface LiveDetection {
   id: string
+  scene_key: string
   tile_id: string
   conf: number
   x_px: number
@@ -204,6 +206,12 @@ export interface LiveAnalysisResult {
   detections: LiveDetection[]
 }
 
+export interface LiveBatchAnalysisResult {
+  scene_count: number
+  tile_count: number
+  scenes: LiveAnalysisResult[]
+}
+
 async function post<T>(path: string): Promise<T> {
   const r = await fetch(path, { method: 'POST' })
   if (!r.ok) {
@@ -218,5 +226,6 @@ export const loadLiveTiles = (key: string) =>
   get<LiveTile[]>(`/api/live/scenes/${encodeURIComponent(key)}/tiles`)
 export const analyzeLiveScene = (key: string) =>
   post<LiveAnalysisResult>(`/api/live/scenes/${encodeURIComponent(key)}/analyze`)
+export const analyzeAllLiveScenes = () => post<LiveBatchAnalysisResult>('/api/live/scenes/analyze-all')
 export const liveTileImageUrl = (sceneKey: string, tileId: string) =>
   `/api/live/scenes/${encodeURIComponent(sceneKey)}/tiles/${encodeURIComponent(tileId)}/image`
