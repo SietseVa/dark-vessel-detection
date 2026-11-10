@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Category, Dataset, Detection, DetectionCounts, ModelInfo, Predictions, Scene, VesselObject } from '@/api'
 import { loadDataset, loadModel, loadPredictions } from '@/api'
-import { DEFAULT_FILTERS, objectMatches, tileMatches, type Filters } from '@/filters'
+import { DEFAULT_FILTERS, SHORE_MAX, objectMatches, tileMatches, type Filters } from '@/filters'
 import { CATEGORIES, CATEGORY_HEX, CATEGORY_LABEL, MIN_CONF, MODEL_FILL, MODEL_LABEL, fmt, type Layers } from '@/theme'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,7 +16,16 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { MapView } from '@/components/MapView'
 import { TileGrid, type TileScore } from '@/components/TileGrid'
 import { TileViewer } from '@/components/TileViewer'
-import { SceneBars, StackedHistogram, type BinDatum, type SceneDatum } from '@/components/Charts'
+import {
+  SceneBars,
+  StackedHistogram,
+  foundChartConfig,
+  foundKeys,
+  labelChartConfig,
+  modelChartConfig,
+  type BinDatum,
+  type SceneDatum,
+} from '@/components/Charts'
 import { Swatch } from '@/components/Swatch'
 
 const VESSELS: Category[] = ['ais', 'dark']
@@ -32,23 +41,33 @@ function regionName([lon, lat]: [number, number]): string {
 
 const sceneLabel = (s: Scene) => `${regionName(s.center)} · ${s.scene_id.slice(0, 6)}`
 
-function histogram(
-  objects: VesselObject[],
-  value: (o: VesselObject) => number | null,
+/** Counts items per bin and series. `key` returns the series, or null to skip the item. */
+function histogram<T>(
+  items: T[],
+  value: (o: T) => number | null,
+  key: (o: T) => string | null,
+  keys: string[],
   edges: number[],
   label: (lo: number, i: number) => string,
 ): BinDatum[] {
-  const bins: BinDatum[] = edges.map((lo, i) => ({ label: label(lo, i), ais: 0, dark: 0 }))
-  for (const o of objects) {
-    if (o.category === 'fixed') continue
+  const bins: BinDatum[] = edges.map((lo, i) => ({ label: label(lo, i), ...Object.fromEntries(keys.map((k) => [k, 0])) }))
+  for (const o of items) {
+    const k = key(o)
     const v = value(o)
-    if (v == null) continue
+    if (k == null || v == null) continue
     let i = edges.length - 1
     while (i > 0 && v < edges[i]) i--
-    bins[i][o.category] = (bins[i][o.category] ?? 0) + 1
+    bins[i][k] = (bins[i][k] as number) + 1
   }
   return bins
 }
+
+const LENGTH_EDGES = [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220, 240]
+const lengthLabel = (lo: number, i: number) => (i === LENGTH_EDGES.length - 1 ? '240+' : String(lo))
+const SHORE_EDGES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+const MODEL_CLASSES = ['vessel', 'non_vessel']
+/** Detection size: the long side of its box at 10 m per pixel. */
+const boxSizeM = (d: Detection) => Math.max(d.w_px, d.h_px) * 10
 
 function Recall({ category, found, total }: { category: Category; found: number; total: number }) {
   const pct = total ? Math.round((found / total) * 100) : 0
@@ -66,6 +85,18 @@ function Recall({ category, found, total }: { category: Category; found: number;
         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: CATEGORY_HEX[category] }} />
       </div>
     </div>
+  )
+}
+
+function ChartCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   )
 }
 
@@ -126,6 +157,7 @@ export default function App() {
   }, [])
 
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setFilters((f) => ({ ...f, [k]: v }))
+  const focusScene = (id: string) => setFilters((f) => ({ ...f, scene: f.scene === id ? null : id }))
 
   const scenes = useMemo(
     () =>
@@ -203,15 +235,13 @@ export default function App() {
       .sort((a, b) => b.dark - a.dark)
   }, [data, filters, scenes])
 
+  const vesselKey = (o: VesselObject) => (o.category === 'fixed' ? null : o.category)
   const lengthHist = useMemo(
-    () =>
-      histogram(objects, (o) => o.length_m, [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220, 240], (lo, i) =>
-        i === 12 ? '240+' : String(lo),
-      ),
+    () => histogram(objects, (o) => o.length_m, vesselKey, VESSELS, LENGTH_EDGES, lengthLabel),
     [objects],
   )
   const shoreHist = useMemo(
-    () => histogram(objects, (o) => o.dist_shore_km, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], (lo) => String(lo)),
+    () => histogram(objects, (o) => o.dist_shore_km, vesselKey, VESSELS, SHORE_EDGES, String),
     [objects],
   )
 
@@ -268,6 +298,64 @@ export default function App() {
     }
     return r
   }, [objects, predictedTiles, found])
+
+  // ---- Sidebar charts for Model and Both mode ----
+
+  // Model mode: detections per scene by predicted class (ignores the scene filter, like perScene).
+  const modelPerScene = useMemo((): SceneDatum[] => {
+    const by = new Map<string, Record<string, number>>()
+    for (const d of predictions?.detections ?? []) {
+      if (d.conf < MIN_CONF || (filters.split !== 'all' && d.split !== filters.split)) continue
+      if (!by.has(d.scene_id)) by.set(d.scene_id, { vessel: 0, non_vessel: 0 })
+      by.get(d.scene_id)![d.class]++
+    }
+    return scenes
+      .filter((s) => by.has(s.scene_id))
+      .map((s) => ({ label: sceneLabel(s), scene_id: s.scene_id, ...by.get(s.scene_id)! }) as SceneDatum)
+      .sort((a, b) => +b.vessel - +a.vessel)
+  }, [predictions, filters.split, scenes])
+  const modelSizeHist = useMemo(
+    () => histogram(shownDetections, boxSizeM, (d) => d.class, MODEL_CLASSES, LENGTH_EDGES, lengthLabel),
+    [shownDetections],
+  )
+
+  // Both mode: labels split into found / missed, only on tiles the model has run on.
+  const foundKey = (o: VesselObject) => `${o.category}_${found.has(o.id) ? 'found' : 'missed'}`
+  const bothCats = CATEGORIES.filter((c) => filters.categories[c])
+  const bothKeys = foundKeys(bothCats)
+  const bothVesselKeys = foundKeys(VESSELS.filter((c) => filters.categories[c]))
+  const scoredObjects = useMemo(() => objects.filter((o) => predictedTiles.has(o.tile_id)), [objects, predictedTiles])
+  const bothPerScene = useMemo((): SceneDatum[] => {
+    const noScene = { ...filters, scene: null }
+    const empty = () => Object.fromEntries([...foundKeys(CATEGORIES), 'extra'].map((k) => [k, 0]))
+    const by = new Map<string, Record<string, number>>()
+    const get = (id: string) => {
+      if (!by.has(id)) by.set(id, empty())
+      return by.get(id)!
+    }
+    for (const o of data?.objects ?? []) {
+      if (!predictedTiles.has(o.tile_id) || !objectMatches(o, noScene)) continue
+      get(o.scene_id)[foundKey(o)]++
+    }
+    for (const d of predictions?.detections ?? []) {
+      if (d.match_id != null || d.conf < MIN_CONF || (filters.split !== 'all' && d.split !== filters.split)) continue
+      get(d.scene_id).extra++
+    }
+    return scenes
+      .filter((s) => by.has(s.scene_id))
+      .map((s) => ({ label: sceneLabel(s), scene_id: s.scene_id, ...by.get(s.scene_id)! }) as SceneDatum)
+      .sort((a, b) => +b.dark_found + +b.dark_missed - (+a.dark_found + +a.dark_missed))
+  }, [data, filters, scenes, predictions, predictedTiles, found])
+  const bothLengthHist = useMemo(
+    () =>
+      histogram(scoredObjects, (o) => o.length_m, (o) => (o.category === 'fixed' ? null : foundKey(o)), foundKeys(VESSELS), LENGTH_EDGES, lengthLabel),
+    [scoredObjects, found],
+  )
+  const bothShoreHist = useMemo(
+    () =>
+      histogram(scoredObjects, (o) => o.dist_shore_km, (o) => (o.category === 'fixed' ? null : foundKey(o)), foundKeys(VESSELS), SHORE_EDGES, String),
+    [scoredObjects, found],
+  )
 
   const tileIndex = selectedTile ? tiles.findIndex((t) => t.tile_id === selectedTile) : -1
   const tile = selectedTile ? (data?.tiles.find((t) => t.tile_id === selectedTile) ?? null) : null
@@ -463,6 +551,21 @@ export default function App() {
                     onValueChange={([v]) => set('minLength', v)}
                   />
               </div>
+
+              <div className="flex flex-col gap-2">
+                <Label className="text-muted-foreground">Min. distance to shore: {filters.minShore} km</Label>
+                <Slider
+                  className="h-9"
+                  min={0}
+                  max={SHORE_MAX}
+                  step={0.5}
+                  value={[filters.minShore]}
+                  onValueChange={([v]) => set('minShore', v)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Only known within {SHORE_MAX} km of shore; objects without a value count as farther out and are always shown.
+                </p>
+              </div>
               </>
               )}
               {!isDefault && (
@@ -472,45 +575,73 @@ export default function App() {
               )}
             </div>
 
-            {!modelOnly && (
-            <>
             <Separator />
 
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>Objects per scene</CardTitle>
-                <CardDescription>Sorted by dark vessels · click a bar to focus</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <SceneBars
-                  data={perScene}
-                  cats={CATEGORIES.filter((c) => filters.categories[c])}
-                  active={filters.scene}
-                  onSelect={(id) => set('scene', filters.scene === id ? null : id)}
-                />
-              </CardContent>
-            </Card>
-
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>Vessel length (m)</CardTitle>
-                <CardDescription>Vessels with a known length</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <StackedHistogram data={lengthHist} cats={vesselCats} />
-              </CardContent>
-            </Card>
-
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>Distance to shore (km)</CardTitle>
-                <CardDescription>Only known within 10 km of shore; other vessels have no value.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <StackedHistogram data={shoreHist} cats={vesselCats} />
-              </CardContent>
-            </Card>
-            </>
+            {modelOnly ? (
+              predictions && (
+                <>
+                  <ChartCard title="Detections per scene" description="Sorted by vessels · click a bar to focus">
+                    <SceneBars
+                      data={modelPerScene}
+                      keys={MODEL_CLASSES}
+                      config={modelChartConfig}
+                      active={filters.scene}
+                      onSelect={focusScene}
+                    />
+                  </ChartCard>
+                  <ChartCard
+                    title="Detection size (m)"
+                    description="Long side of the box at 10 m per pixel; a rough size, not a measured length."
+                  >
+                    <StackedHistogram data={modelSizeHist} keys={MODEL_CLASSES} config={modelChartConfig} />
+                  </ChartCard>
+                </>
+              )
+            ) : layers === 'both' && predictions ? (
+              <>
+                <ChartCard
+                  title="Found per scene"
+                  description="Labels the model found (solid) or missed (hollow), plus detections without a label · click a bar to focus"
+                >
+                  <SceneBars
+                    data={bothPerScene}
+                    keys={[...bothKeys, 'extra']}
+                    config={foundChartConfig}
+                    active={filters.scene}
+                    onSelect={focusScene}
+                  />
+                </ChartCard>
+                <ChartCard title="Vessel length (m)" description="Found vs missed, vessels with a known length">
+                  <StackedHistogram data={bothLengthHist} keys={bothVesselKeys} config={foundChartConfig} />
+                </ChartCard>
+                <ChartCard
+                  title="Distance to shore (km)"
+                  description="Found vs missed. Only known within 10 km of shore."
+                >
+                  <StackedHistogram data={bothShoreHist} keys={bothVesselKeys} config={foundChartConfig} />
+                </ChartCard>
+              </>
+            ) : (
+              <>
+                <ChartCard title="Objects per scene" description="Sorted by dark vessels · click a bar to focus">
+                  <SceneBars
+                    data={perScene}
+                    keys={CATEGORIES.filter((c) => filters.categories[c])}
+                    config={labelChartConfig}
+                    active={filters.scene}
+                    onSelect={focusScene}
+                  />
+                </ChartCard>
+                <ChartCard title="Vessel length (m)" description="Vessels with a known length">
+                  <StackedHistogram data={lengthHist} keys={vesselCats} config={labelChartConfig} />
+                </ChartCard>
+                <ChartCard
+                  title="Distance to shore (km)"
+                  description="Only known within 10 km of shore; other vessels have no value."
+                >
+                  <StackedHistogram data={shoreHist} keys={vesselCats} config={labelChartConfig} />
+                </ChartCard>
+              </>
             )}
           </div>
         </ScrollArea>

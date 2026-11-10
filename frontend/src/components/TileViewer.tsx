@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { CATEGORY_HEX, CATEGORY_SHORT, MIN_CONF, MODEL_FILL, MODEL_HEX, MODEL_LABEL, MODEL_SHORT, type Layers } from '@/theme'
+import { CATEGORIES, CATEGORY_HEX, CATEGORY_LABEL, CATEGORY_SHORT, MIN_CONF, MODEL_FILL, MODEL_HEX, MODEL_LABEL, MODEL_SHORT, type Layers } from '@/theme'
 import { cn } from '@/lib/utils'
 import { Swatch } from './Swatch'
 
@@ -217,9 +217,17 @@ export function TileViewer({ tile, objects, index, total, onPrev, onNext, onClos
           </div>
         </div>
 
-        {model && (
+        {(model || !modelOnly) && (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
-            {(['vessel', 'non_vessel'] as const).map((c) => (
+            {/* Labels: solid boxes by category. Model: dashed boxes by predicted class. */}
+            {!modelOnly &&
+              CATEGORIES.map((c) => (
+                <span key={c} className="flex items-center gap-1.5">
+                  <span className="h-0.5 w-4" style={{ background: CATEGORY_HEX[c] }} /> {CATEGORY_LABEL[c]}
+                  {model ? ' (label)' : ''}
+                </span>
+              ))}
+            {model && (['vessel', 'non_vessel'] as const).map((c) => (
               <span key={c} className="flex items-center gap-1.5">
                 <span
                   className={cn(
