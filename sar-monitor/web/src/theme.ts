@@ -1,14 +1,14 @@
 // The shadcn base theme is neutral; these are the only data colours. Radar detections are
 // filled dots, AIS ships are hollow rings, so the two never rely on hue alone.
 export const COLORS = {
-  matched: '#2a78d6',
-  dark: '#eb6834',
+  matched: '#1f9d55',
+  dark: '#e02d2d',
   aisOnly: '#6250d6',
 } as const
 
 // Infrastructure is drawn as thin lines and outlines in muted colours, under the vessel markers.
 export const INFRA: Record<string, { label: string; color: string }> = {
-  wind_farm: { label: 'Wind farm', color: '#1a9a6c' },
+  wind_farm: { label: 'Wind farm', color: '#2a78d6' },
   platform: { label: 'Platform', color: '#1f1f1f' },
   pipeline: { label: 'Pipeline', color: '#8a5a2b' },
   power_cable: { label: 'Power cable', color: '#c99a06' },
