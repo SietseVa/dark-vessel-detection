@@ -13,6 +13,13 @@ export default defineConfig({
   server: {
     port: 5180,
     strictPort: true,
-    proxy: { '/api': `http://127.0.0.1:${apiPort}` },
+    proxy: {
+      '/api': `http://127.0.0.1:${apiPort}`,
+      // The SAR monitor page (ported from codex/sar-yolo-tiles) talks to its own API, see sar-monitor/.
+      '/sar-api': {
+        target: `http://127.0.0.1:${process.env.SAR_API_PORT ?? '8020'}`,
+        rewrite: (path) => path.replace(/^\/sar-api/, '/api'),
+      },
+    },
   },
 })
